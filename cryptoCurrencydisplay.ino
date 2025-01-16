@@ -9,8 +9,8 @@
 TFT_eSPI tft = TFT_eSPI();  // Initialize TFT screen
 
 // WiFi Credentials
-const char* ssid = "";
-const char* pswd = "";
+const char* ssid = "REDACTED";
+const char* pswd = "REDACTED";
 
 // Coins to display
 const char* coins[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "USDCUSDT", "BUSDUSDT"};
@@ -33,7 +33,13 @@ int lastScreenIndex = 0;
 
 // Global Millis Variables for Screen Update
 unsigned long previousMillis = 0;  // Global timer to track screen update intervals
-const unsigned long interval = 5000;  // Update every 5 seconds
+const unsigned long interval = 5000;  
+
+// Global Millis Variables for Data Update
+unsigned long previousDataMillis = 0;  // Timer for data update
+const unsigned long dataUpdateInterval = 4000;  // Update coin data every 30 seconds
+int currentCoinIndex = 0;  // Keep track of which coin to update next
+
 
 void setup() {
   Serial.begin(115200);
@@ -44,18 +50,22 @@ void setup() {
   pinMode(buttonPin, INPUT_PULLUP);  // Set button pin as input with pull-up
 
   connectToWiFi();
+  updateALLCoinsArrays();
 }
 
 void loop() {
-  readButton();
-  // if(lastButtonState == 1){
-  //       screenIndex += 1;
-  //       // previousMillis = 0;
-  //       tft.fillCircle(10, 10, 3, TFT_GREEN);
-  // }
-
-  
+  readButton();  
   updateDisplay();
+  // updateCoinArray_BackgroundLoop();
+
+  // Debug: Direct button state
+  Serial.print("Current button state: ");
+  Serial.println(digitalRead(buttonPin));
+  unsigned long currentMillis = millis();
+  Serial.print("Millis diff: ");
+  Serial.println(currentMillis-previousMillis);
+  Serial.print("Current screenIndex: ");
+  Serial.println(screenIndex);
 }
 
 
@@ -70,41 +80,98 @@ void connectToWiFi() {
   Serial.println("\nConnected to Wi-Fi");
   Serial.println(WiFi.localIP());
 }
+void updateCoinArray(int coinIndex) {
+  HTTPClient http;
+  String url = "https://api.binance.com/api/v3/ticker/24hr?symbol=" + String(coins[coinIndex]);
+  http.begin(url);
+
+  int httpResponseCode = http.GET();
+  if (httpResponseCode == HTTP_CODE_OK) {
+    DynamicJsonDocument jsonBuffer(2048);
+    DeserializationError error = deserializeJson(jsonBuffer, http.getString());
+
+    if (error) {
+      Serial.print("Failed to parse JSON: ");
+      Serial.println(error.c_str());
+    } else {
+      prices[coinIndex] = jsonBuffer["lastPrice"].as<float>();
+      changePercentages[coinIndex] = jsonBuffer["priceChangePercent"].as<float>();
+    }
+  } else {
+    Serial.print("HTTP request failed with error code: ");
+    Serial.println(httpResponseCode);
+  }
+  http.end();  // End the HTTP request
+} // single coin http update
+void updateALLCoinsArrays() {
+  // Loop through all coins and fetch data
+  for (int i = 0; i < numCoins; i++) {
+    updateCoinArray(i);
+  }
+} // at setup ONLY
+void updateCoinArray_BackgroundLoop() {
+  unsigned long currentMillis = millis();
+
+  if (currentMillis - previousDataMillis >= dataUpdateInterval) {
+    updateCoinArray(currentCoinIndex);  // Update one coin at a time
+    
+    // // Move to next coin
+    currentCoinIndex = (currentCoinIndex + 1) % numCoins;
+    // updateALLCoinsArrays();
+    // Update the data 
+    previousDataMillis = currentMillis;
+  }
+} // Non-blocking function to update coin data one by one
+void updateCoinArray() {
+  // unsigned long currentMillis = millis();
+  // if (currentMillis - previousDataMillis >= dataUpdateInterval) {
+    updateCoinArray(currentCoinIndex);  // Update one coin at a time
+    // // Move to next coin
+    currentCoinIndex = (currentCoinIndex + 1) % numCoins;
+    // updateALLCoinsArrays();
+    // Update the data 
+    // previousDataMillis = currentMillis;
+  // }
+}
 
 void readButton() {
-  // Read the state of the button
-  int reading = digitalRead(buttonPin);
+    int reading = digitalRead(buttonPin);  // Read current state of the button
 
-  // If the state of the button has changed, reset the debounce timer
-  if (reading != lastButtonState) {
-    lastDebounceTime = millis();
-  }
-
-  // If the state has been stable for the debounce delay, proceed
-  if ((millis() - lastDebounceTime) > debounceDelay) {
-    // If the button state has changed and it was previously not pressed
-    if (reading != buttonState) {
-      buttonState = reading;
-
-      // Only toggle the screenIndex if the button is pressed (LOW)
-      if (buttonState == LOW) {
-        screenIndex = (screenIndex == 0) ? 1 : 0;  // Toggle between 0 and 1
-        previousMillis = millis();  // Reset the timer to force immediate update
-      }
+    // Check for a state change
+    if (reading != lastButtonState) {
+        lastDebounceTime = millis();  // Reset debounce timer
     }
-  }
 
-  lastButtonState = reading;  // Save the current state for the next loop
-}
+    // Apply debounce delay
+    if ((millis() - lastDebounceTime) > debounceDelay) {
+        // Check if state has changed
+        if (reading != buttonState) {
+            buttonState = reading;
+
+            // Button pressed (LOW)
+            if (buttonState == LOW) {
+                Serial.println("Button pressed! Toggling screen index.");
+                screenIndex = (screenIndex + 1) % 2;  // Toggle between 0 and 1
+            }
+        }
+    }
+
+    lastButtonState = reading;  // Save the state for the next loop
+} //changes screenIndex when pressed
 
 
 //=======Updates_MILLIS()=======
 // This function will update the screen every 10 seconds automatically
 void updateDisplay() {
   unsigned long currentMillis = millis();
-  // Check if enough time has passed to update the screen
-  if (currentMillis - previousMillis >= interval || lastScreenIndex != screenIndex) {
-    tft.fillScreen(TFT_PURPLE);
+  Serial.print("Millis diff: ");
+  Serial.println(currentMillis-previousMillis);
+  Serial.print("Current screenIndex: ");
+  Serial.println(screenIndex);
+
+  // UPDATE via Timer
+  if (currentMillis - previousMillis >= interval) {
+    tft.fillScreen(TFT_NAVY);
     switch (screenIndex) {
       case 0: 
         cryptoView();  // Coin info screen
@@ -115,7 +182,28 @@ void updateDisplay() {
       default: 
         break;
     }
+    updateCoinArray();
     previousMillis = currentMillis;  // Update the timer
+    
+  }
+  // CHANGE SCREEN via button
+  if (lastScreenIndex != screenIndex) {
+    tft.fillScreen(TFT_GOLD);
+    // Serial.print("screenIndex :");
+    // Serial.println(screenIndex);
+    // Serial.print("lastScreenIndex :");
+    // Serial.println(lastScreenIndex);
+    switch (screenIndex) {
+      case 0: 
+        cryptoView();  // Coin info screen
+        break;
+      case 1: 
+        singleCryptoView();  // Single crypto info screen
+        break;
+      default: 
+        break;
+    }
+    updateCoinArray();
     lastScreenIndex = screenIndex;  // Update Index
   }
 }
@@ -124,6 +212,7 @@ void updateDisplay() {
 
 //====CRYPTO_VIEW===============
 void cryptoView() {
+  // updateCoinsArrays();
   tft.fillScreen(TFT_BLACK);  // Clear the screen
   displayTitle();
   displayWifiStatus();
@@ -214,8 +303,71 @@ String getFormattedCoinName(const char* coinSymbol) {
   return coinName;
 }
 
+
+
+
 //====Single_Crypto_View======
 void singleCryptoView() {
-  tft.fillScreen(TFT_GREEN);
-  
+  int coinIndex = 0; // For example, use index 0 for "BTCUSDT"
+  tft.fillScreen(TFT_GREEN);  // Clear the screen with a color (can be changed)
+
+  displaySingleCryptoInfo(coinIndex, prices, changePercentages);  // Display the info for the selected coin
 }
+  
+
+
+
+
+void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercentages[]) {
+  tft.fillScreen(TFT_BLACK);
+  int maxWidth = tft.width();
+  int leftPadding = 4;
+  int rightMargin = 2;
+  int yPosition = 5;
+
+  // Get the formatted coin name
+  String coinName = getFormattedCoinName(coins[coinIndex]);
+  
+  // Get the percentage change for the coin
+  float change = changePercentages[coinIndex];
+  String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
+  
+  // Get the price for the coin
+  float price = prices[coinIndex];
+  String priceText = "$" + String(price, 2);
+
+  // Calculate positions for coin name, change percentage, and price
+  int coinNameWidth = tft.textWidth(coinName);
+  int changeTextWidth = tft.textWidth(changeText);
+  int priceTextWidth = tft.textWidth(priceText);
+
+  int changeX = maxWidth - changeTextWidth - rightMargin;
+  int coinNameX = leftPadding;
+  int priceX = maxWidth - priceTextWidth - rightMargin;
+
+  // Set text size for the coin name and percentage change (size 2)
+  tft.setTextSize(2);
+
+  // Print the coin name on the left
+  tft.setCursor(coinNameX, yPosition);
+  tft.setTextColor(TFT_WHITE);
+  tft.print(coinName);
+
+  // Print the percentage change on the right
+  tft.setCursor(changeX, yPosition);
+  tft.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
+  tft.print(changeText);
+
+  // Move to the next line for the price
+  yPosition += 24;  // Move down for the next line (adjust based on text size)
+
+  // Set text size for the price (size 1)
+  // tft.setTextSize(1);
+
+  // Print the price on the next line
+  tft.setCursor(priceX, yPosition);
+  tft.setTextColor(TFT_WHITE);
+  tft.print(priceText);
+}
+
+
