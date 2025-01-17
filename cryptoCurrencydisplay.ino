@@ -45,6 +45,7 @@ struct Candle {
   float v;  // Volume
 };
 Candle candles[100];  // Array to store candle data (modify size as needed)
+const unsigned long dataHistoricalUpdateInterval = 11000;
 
 
 // Binance API endpoint and parameters
@@ -61,6 +62,9 @@ void setup() {
   tft.setRotation(4);
   pinMode(buttonPin, INPUT_PULLUP);  // Set button pin as input with pull-up
   connectToWiFi();
+
+  // Data
+  fetchHistoricalData(1);
   updateALLCoinsArray();
 }
 void loop() {
@@ -116,10 +120,15 @@ void updateALLCoinsArray(){
       updateCoinArray(i);
     }
 }
-void updateCoinArray_BackgroundLoop() {
+void update_DATA_BackgroundLoop() {
     unsigned long currentMillis = millis();
+  // 1st screen coin data fetch
   if (currentMillis - previousDataMillis >= dataUpdateInterval) {
     updateALLCoinsArray();
+  }
+  // CHART
+  if (currentMillis - previousDataMillis >= dataHistoricalUpdateInterval) {
+    fetchHistoricalData(1);
   }
 } // Non-blocking function to update coin data one by one
 
@@ -273,32 +282,82 @@ String getFormattedCoinName(const char* coinSymbol) {
 
 
 //====Single_Crypto_View======
-
-
 void singleCryptoView() {
-  int coinIndex = 0; // For example, use index 0 for "BTCUSDT"
-  tft.fillScreen(TFT_GREEN);  // Clear the screen with a color (can be changed)
+  // AREA :
+  //      - displaySingleCryptoInfo  :  (0,0) to (xmax, 20)
+  //      - displayCandlestickChart  :  (0,20) to (xmax, 100)
+  int coinIndex = 0; // use index 0 for "BTCUSDT"
+  tft.fillScreen(TFT_BLACK);  // Clear the screen with a color (can be changed)
   displaySingleCryptoInfo(coinIndex, prices, changePercentages);  // Display the info for the selected coin
-
-
-
-  // Sample candle data (Open, High, Low, Close, Volume)
-  Candle sampleCandle = { 50.0, 55.0, 45.0, 52.0, 1000.0 };  // Example values
-
-  // Define min and max values for price scaling
-  float minPrice = 40.0;
-  float maxPrice = 60.0;
-
-  fetchHistoricalData(1);
   displayCandlestickChart();
+  // debugPrintColorfulPixels();
   
-  // Draw the candle at position (50, 50)
-  // drawCandle(50, sampleCandle, minPrice, maxPrice);
 }
 
 
+void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercentages[]) {
+  // Define drawing area
+  int startX = 0;
+  int startY = 4;
+  int endX = tft.width();
+  int endY = 100; // Set specific height for this display section
+  int maxWidth = endX - startX; // Maximum width within the defined area
+  int leftPadding = 4;
+  int rightMargin = 2;
+  int yPosition = startY; // Start drawing within the area
 
+  // Clear only the specified area
+  tft.fillRect(startX, startY, maxWidth, endY - startY, TFT_BLACK);
 
+  // GET COIN INFO
+  String coinName = getFormattedCoinName(coins[coinIndex]);
+  float change = changePercentages[coinIndex];
+  String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
+  float price = prices[coinIndex];
+  String priceText = "$" + String(price, 2);
+
+  // Calculate positions for coin name, change percentage, and price
+  int coinNameWidth = tft.textWidth(coinName);
+  int changeTextWidth = tft.textWidth(changeText);
+  int priceTextWidth = tft.textWidth(priceText);
+  int changeX = endX - changeTextWidth - rightMargin;
+  int coinNameX = startX + leftPadding;
+  int priceX = startX + leftPadding; // endX - priceTextWidth - rightMargin;
+
+  // FORMATTING
+  if (changeTextWidth > maxWidth - leftPadding - rightMargin) {
+    // Truncate change text if necessary
+    changeText = changeText.substring(0, maxWidth / 8);  // Adjust length to fit
+    changeTextWidth = tft.textWidth(changeText);  // Recalculate width
+  }
+
+  if (priceTextWidth > maxWidth - leftPadding - rightMargin) {
+    // Truncate price text if necessary
+    priceText = priceText.substring(0, maxWidth / 8);  // Adjust length to fit
+    priceTextWidth = tft.textWidth(priceText);  // Recalculate width
+  }
+
+  // Set text size for the coin name and percentage change (size 2)
+  tft.setTextSize(2);
+
+  // Print the coin name on the left (adjusted for overflow)
+  tft.setCursor(coinNameX, yPosition);
+  tft.setTextColor(TFT_WHITE);
+  tft.print(coinName);
+
+  // Print the percentage change on the right
+  tft.setCursor(changeX, yPosition);
+  tft.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
+  tft.print(changeText);
+
+  // Move to the next line for the price
+  yPosition += 20; // Move down for the next line (adjust based on text size)
+
+  // Print the price on the next line
+  tft.setCursor(priceX, yPosition);
+  tft.setTextColor(TFT_WHITE);
+  tft.print(priceText);
+}
 
 
 void fetchHistoricalData(int coinIndex) {
@@ -335,119 +394,87 @@ void fetchHistoricalData(int coinIndex) {
 
   http.end();
 }
+void drawCandle(int x, const Candle &candle, int yStart, int yEnd, float minPrice, float maxPrice) {
+  int availableHeight = yEnd - yStart; // Total height for the chart
+  int candleWidth = 6;  // Width of the candlestick body
+  int wickWidth = 2;    // Width of the wick
+  
+  // Scale prices to pixel positions
+  int yHigh = yStart + (maxPrice - candle.h) * availableHeight / (maxPrice - minPrice);
+  int yLow = yStart + (maxPrice - candle.l) * availableHeight / (maxPrice - minPrice);
+  int yOpen = yStart + (maxPrice - candle.o) * availableHeight / (maxPrice - minPrice);
+  int yClose = yStart + (maxPrice - candle.c) * availableHeight / (maxPrice - minPrice);
 
-void drawCandle(int x, const Candle& candle, float minPrice, float maxPrice) {
-  // Map prices to screen coordinates
-  int yOpen = map(candle.o, minPrice, maxPrice, tft.height(), 0);
-  int yClose = map(candle.c, minPrice, maxPrice, tft.height(), 0);
-  int yHigh = map(candle.h, minPrice, maxPrice, tft.height(), 0);
-  int yLow = map(candle.l, minPrice, maxPrice, tft.height(), 0);
+  // Ensure the body is always drawn top to bottom
+  int yBodyTop = min(yOpen, yClose);
+  int yBodyBottom = max(yOpen, yClose);
 
-  // Draw the high-low line
-  tft.drawLine(x, yHigh, x, yLow, TFT_WHITE);
+  // Color for up/down candles
+  uint32_t bodyColor = (candle.c >= candle.o) ? TFT_GREEN : TFT_RED;
 
-  // Draw the open-close rectangle
-  if (candle.c > candle.o) {
-    tft.fillRect(x - 2, yClose, 4, yOpen - yClose, TFT_GREEN);  // Green for rising
-  } else {
-    tft.fillRect(x - 2, yOpen, 4, yClose - yOpen, TFT_RED);  // Red for falling
-  }
+  // Draw the wick
+  tft.fillRect(x + (candleWidth - wickWidth) / 2, yHigh, wickWidth, yLow - yHigh, bodyColor);
+
+  // Draw the candle body
+  tft.fillRect(x, yBodyTop, candleWidth, yBodyBottom - yBodyTop, bodyColor);
 }
 
 void displayCandlestickChart() {
-  int x = 0;
+  int x = 10;
+  int yStart = 50;   
+  int yEnd = tft.height();
+  
+  // Find the min and max prices from the candles
   float minPrice = candles[0].l;
   float maxPrice = candles[0].h;
 
-  // Calculate min and max prices to scale the chart
-  for (int i = 0; i < limit; i++) {
+  for (int i = 1; i < limit; i++) {
     if (candles[i].l < minPrice) minPrice = candles[i].l;
     if (candles[i].h > maxPrice) maxPrice = candles[i].h;
   }
 
+  // displayCryptoScale(minPrice, maxPrice, yStart, yEnd);
+
   // Draw each candle
   for (int i = 0; i < limit; i++) {
-    drawCandle(x, candles[i], minPrice, maxPrice);
-    x += 10; // Adjust the spacing between candles
+    drawCandle(x, candles[i], yStart, yEnd, minPrice, maxPrice);
+    x += 8; // Increment x position for the next candle
+  }
+}
+
+void displayCryptoScale(float minPrice, float maxPrice, int yStart, int yEnd) {
+  int scaleSteps = 5; // Number of labels to display on the scale
+  float stepValue = (maxPrice - minPrice) / (scaleSteps - 1);
+  int stepHeight = (yEnd - yStart) / (scaleSteps - 1);
+
+  // Draw the scale
+  for (int i = 0; i < scaleSteps; i++) {
+    float price = minPrice + stepValue * i;
+    int yPosition = yEnd - i * stepHeight; // Invert Y since the screen's origin is at the top-left
+
+    // Print price label
+    tft.setCursor(0, yPosition - 8); // Adjust y-position to center the text
+    tft.setTextSize(1);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.print(String(price, 2)); // Print the price with 2 decimal points
+
+    // Optional: Draw horizontal grid line
+    tft.drawLine(30, yPosition, tft.width(), yPosition, TFT_DARKGREY);
   }
 }
 
 
-  
-// void displayCandlestickChart(){
-//   int maxWidth = tft.width();
-//   int maxHeight = tft.height();
-//   tft.setCursor(0, maxHeight-5);
-//   tft.fillCircle(0, maxHeight-5, 3, TFT_OLIVE);
 
-// }
 
-void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercentages[]) {
-  tft.fillScreen(TFT_BLACK);  // Clear screen
-  int maxWidth = tft.width();
-  int leftPadding = 4;
-  int rightMargin = 2;
-  int yPosition = 5;
 
-  // Get the formatted coin name
-  String coinName = getFormattedCoinName(coins[coinIndex]);
-
-  // Get the percentage change for the coin
-  float change = changePercentages[coinIndex];
-  String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
-
-  // Get the price for the coin
-  float price = prices[coinIndex];
-  String priceText = "$" + String(price, 2);
-
-  // Calculate positions for coin name, change percentage, and price
-  int coinNameWidth = tft.textWidth(coinName);
-  int changeTextWidth = tft.textWidth(changeText);
-  int priceTextWidth = tft.textWidth(priceText);
-  int changeX = maxWidth - changeTextWidth - rightMargin;
-  int coinNameX = leftPadding;
-  int priceX = maxWidth - priceTextWidth - rightMargin;
-
-  // Ensure we don't overflow by checking text widths
-  if (coinNameWidth > maxWidth - leftPadding - rightMargin) {
-    // Truncate coin name if it doesn't fit
-    coinName = coinName.substring(0, maxWidth / 8);  // Adjust length to fit
-    coinNameWidth = tft.textWidth(coinName);  // Recalculate width
+//===DEBUG====
+void debugPrintColorfulPixels() {
+  for (int y = 0; y < tft.height(); y++) {
+    // Choose a color gradient based on the y position
+    uint16_t color = tft.color565(y % 32 * 8, y % 64 * 4, y % 128 * 2); // RGB gradient
+    for (int x = 0; x < tft.width(); x++) {
+      tft.drawPixel(x, y, color);
+    }
   }
-
-  // Ensure change percentage fits in available space
-  if (changeTextWidth > maxWidth - leftPadding - rightMargin) {
-    // Truncate change text if necessary
-    changeText = changeText.substring(0, maxWidth / 8);  // Adjust length to fit
-    changeTextWidth = tft.textWidth(changeText);  // Recalculate width
-  }
-
-  // Ensure price text fits in available space
-  if (priceTextWidth > maxWidth - leftPadding - rightMargin) {
-    // Truncate price text if necessary
-    priceText = priceText.substring(0, maxWidth / 8);  // Adjust length to fit
-    priceTextWidth = tft.textWidth(priceText);  // Recalculate width
-  }
-
-  // Set text size for the coin name and percentage change (size 2)
-  tft.setTextSize(2);
-
-  // Print the coin name on the left (adjusted for overflow)
-  tft.setCursor(coinNameX, yPosition);
-  tft.setTextColor(TFT_WHITE);
-  tft.print(coinName);
-
-  // Print the percentage change on the right
-  tft.setCursor(changeX, yPosition);
-  tft.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
-  tft.print(changeText);
-
-  // Move to the next line for the price
-  yPosition += 24;  // Move down for the next line (adjust based on text size)
-
-  // Print the price on the next line
-  tft.setCursor(priceX, yPosition);
-  tft.setTextColor(TFT_WHITE);
-  tft.print(priceText);
 }
 
