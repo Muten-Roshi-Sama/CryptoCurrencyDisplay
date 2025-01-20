@@ -1,4 +1,4 @@
-
+//V.1
 #include <Arduino.h>
 #include <Button.h>
 #include <WiFi.h>
@@ -11,16 +11,16 @@
 TFT_eSPI screen = TFT_eSPI();  // Initialize TFT screen
 
 // LCD Dimensions : 128x128
-#define startX 2
-#define startY 2
+#define STARTX 2
+#define STARTY 2
 #define endX 127
 #define endY 129
-int WIDTH = endX - startX;    //125
-int HEIGHT = endY - startY;  //`127
+int WIDTH = endX - STARTX;    //125
+int HEIGHT = endY - STARTY;  //`127
 
 // WiFi Credentials
-const char* ssid = "REDACTED";
-const char* pswd = "REDACTED";
+const char* ssid = "";
+const char* pswd = "";
 
 // Coins to display
 const char* coins[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "USDCUSDT", "BUSDUSDT"};
@@ -200,15 +200,15 @@ void cryptoView() {
   screen.fillScreen(TFT_BLACK);  // Clear the screen
   displayTitle();
   displayWifiStatus();
-  displayCoinInfo(prices, changePercentages);
+  displayCoin(prices, changePercentages);
 }
 // Display Title and Wi-Fi status
 void displayTitle() {
   String title = "Crypto Tracker";
-  int bannerHeight = screen.fontHeight()+2; // 13
+  int bannerHeight = screen.fontHeight()+3; // 13
   int bannerColor = TFT_RED;
   int titleColor = TFT_WHITE;
-  screen.fillRect(startX, startY, WIDTH, bannerHeight, bannerColor);
+  screen.fillRect(STARTX, STARTY, WIDTH, bannerHeight, bannerColor);
   int titleWidth = screen.textWidth(title);
   int titleX = (WIDTH - titleWidth) / 2;
   int titleY = (bannerHeight - 4) / 2;
@@ -220,7 +220,7 @@ void displayTitle() {
 void displayWifiStatus() {
   int wifiStatusX = screen.width() - 8;
   int wifiStatusY = 7;
-  int dot_size = 3;
+  int dot_size = 2;
   if (WiFi.status() == WL_CONNECTED) {
     screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_GREEN);
   } else if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_DISCONNECTED) {
@@ -234,43 +234,47 @@ void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPos
   int cursorWidth = 2;  // Cursor thickness
   // int cursorAreaHeight = yPosition + selectedCoinIndex * (rowHeight + rowMargin);
   int cursorHeight = rowHeight + 1;  //
-  int cursorX = 2;
+  int cursorX = STARTX;
+  int cursorY = yPosition - 1;
   
-  // Clear previous cursor (full column width)
-  screen.fillRect(cursorX, yPosition - 1, cursorWidth, screen.height(), TFT_GREEN);
-
-  // Draw new cursor for the selected coin
-  screen.fillRect(cursorX, yPosition -1 , cursorWidth, cursorHeight, TFT_YELLOW);
+  // CLEAR
+  screen.fillRect(cursorX, cursorY, cursorWidth, HEIGHT, TFT_BLACK);
+  // CURSOR
+  screen.fillRect(cursorX, cursorY, cursorWidth, cursorHeight, TFT_YELLOW);
 }
 
 // Main function to display coin information
-void displayCoinInfo(float prices[], float changePercentages[]) {
-  int maxWidth = WIDTH;
-  int leftPadding = startX + 3; //3
+void displayCoin(float prices[], float changePercentages[]) {
+  int leftPadding = STARTX + 3; //3
   int rightMargin = 1;
-  int rowHeight = 5;         // Height of the text in a single row
-  int rowMargin = 10;         // Margin between rows
-  int yPosition = startY + screen.fontHeight() + 2 + 1; // Initial Y position 16 (see displayTitle())
+  int rowHeight = screen.fontHeight();      // Height of the text in a single row : 5
+  int rowMargin = rowHeight - 1;             // Margin between rows
+  int yPosition = STARTY + screen.fontHeight() + 2 + 5; // Initial Y position, 16 (see displayTitle())
 
   for (int i = 0; i < numCoins; i++) {
-    String coinName = getFormattedCoinName(coins[i]);
     float price = prices[i];
+    String coinName = getFormattedCoinName(coins[i]);
+    String priceText = "Error.";
 
     if (isnan(price) || price <= 0) {
       price = 0.0;
     }
-    if (price > 100000) price = (int)price; // remove Decimals if price >>>
-    String priceText = "$" + String(price, 2);
-    while (screen.textWidth(priceText) > maxWidth / 2) {
-      priceText = "$" + String(price, priceText.length() - 1);
+    // Format price to fit into the available width
+    if (price > 1000 || screen.textWidth(String(price, 2)) > WIDTH / 2) {
+      Serial.println(coinName + " 's decimals have been formatted (>$1000).");
+      priceText = String((int)price); // remove decimals if price is too large
+      priceText = "$" + priceText; // Add the dollar sign
+    } else {
+      priceText = "$" + String(price, 2); // Format price with two decimals for smaller values
     }
+
     // Variables
     float change = changePercentages[i];
     String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
     int coinNameWidth = screen.textWidth(coinName);
     int priceTextWidth = screen.textWidth(priceText);
     int changeTextWidth = screen.textWidth(changeText);
-    int changeX = maxWidth - changeTextWidth - rightMargin;
+    int changeX = WIDTH - changeTextWidth - rightMargin;
     int priceX = changeX - priceTextWidth - 5;
     int coinNameX = leftPadding;
 
@@ -278,16 +282,19 @@ void displayCoinInfo(float prices[], float changePercentages[]) {
     screen.setTextColor(TFT_WHITE, TFT_BLACK);  // Default text color
 
       // Set text color based on selection
-    // if (i == selectedCoinIndex) {
-    //   screen.setTextColor(TFT_BLACK);  // Highlighted coin text color
-    // } else {
-    //   screen.setTextColor(TFT_WHITE);  // Default text color
-    // }
+    if (i == selectedCoinIndex) {
+      // Call the cursor display function
+      displayCursor(selectedCoinIndex, rowHeight, rowMargin, yPosition ,leftPadding);
+      screen.setTextColor(TFT_SKYBLUE);  // Highlighted coin text color TFT_GREENYELLOW TFT_BLUE
+    } else {
+      screen.setTextColor(TFT_WHITE);  // Default text color
+    }
 
 
     // Print coin details
     screen.setCursor(coinNameX, yPosition);
     screen.print(coinName);
+    screen.setTextColor(TFT_WHITE, TFT_BLACK);
     screen.setCursor(priceX, yPosition);
     screen.print(priceText);
     screen.setCursor(changeX, yPosition);
@@ -297,9 +304,6 @@ void displayCoinInfo(float prices[], float changePercentages[]) {
     // Move to the next row
     yPosition += rowHeight + rowMargin;
   }
-
-  // Call the cursor display function
-  displayCursor(selectedCoinIndex, rowHeight, rowMargin, yPosition ,leftPadding);
 }
 
 
@@ -323,12 +327,12 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
   // int startY = 4;
   // int endX = screen.width();
   // int endY = 100; // Set specific height for this display section
-  int maxWidth = endX - startX; // Maximum width within the defined area
+  int WIDTH = endX - STARTX; // Maximum width within the defined area
   int leftPadding = 4;
   int rightMargin = 2;
-  int yPosition = startY; // Start drawing within the area
+  int yPosition = STARTY; // Start drawing within the area
   // Clear only the specified area
-  // screen.fillRect(startX, startY, maxWidth, endY - startY, TFT_BLACK);
+  // screen.fillRect(startX, startY, WIDTH, endY - startY, TFT_BLACK);
   // GET COIN INFO
   String coinName = getFormattedCoinName(coins[coinIndex]);
   float change = changePercentages[coinIndex];
@@ -340,17 +344,17 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
   int changeTextWidth = screen.textWidth(changeText);
   int priceTextWidth = screen.textWidth(priceText);
   int changeX = endX - changeTextWidth - rightMargin;
-  int coinNameX = startX + leftPadding;
-  int priceX = startX + leftPadding; // endX - priceTextWidth - rightMargin;
+  int coinNameX = STARTX + leftPadding;
+  int priceX = STARTX + leftPadding; // endX - priceTextWidth - rightMargin;
   // FORMATTING
-  if (changeTextWidth > maxWidth - leftPadding - rightMargin) {
+  if (changeTextWidth > WIDTH - leftPadding - rightMargin) {
     // Truncate change text if necessary
-    changeText = changeText.substring(0, maxWidth / 8);  // Adjust length to fit
+    changeText = changeText.substring(0, WIDTH / 8);  // Adjust length to fit
     changeTextWidth = screen.textWidth(changeText);  // Recalculate width
   }
-  if (priceTextWidth > maxWidth - leftPadding - rightMargin) {
+  if (priceTextWidth > WIDTH - leftPadding - rightMargin) {
     // Truncate price text if necessary
-    priceText = priceText.substring(0, maxWidth / 8);  // Adjust length to fit
+    priceText = priceText.substring(0, WIDTH / 8);  // Adjust length to fit
     priceTextWidth = screen.textWidth(priceText);  // Recalculate width
   }
   // Set text size for the coin name and percentage change (size 2)
