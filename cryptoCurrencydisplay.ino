@@ -8,7 +8,15 @@
 #include <HTTPClient.h>
 #include <esp_http_client.h>
 
-TFT_eSPI tft = TFT_eSPI();  // Initialize TFT screen
+TFT_eSPI screen = TFT_eSPI();  // Initialize TFT screen
+
+// LCD Dimensions : 128x128
+#define startX 2
+#define startY 2
+#define endX 127
+#define endY 129
+int WIDTH = endX - startX;    //125
+int HEIGHT = endY - startY;  //`127
 
 // WiFi Credentials
 const char* ssid = "REDACTED";
@@ -60,27 +68,28 @@ float hourlyPrices[24];
 //=======================================================================================
 void setup() {
   Serial.begin(115200);
+  connectToWiFi();
   button1.begin();
   button2.begin();
   button3.begin();
 
   // TFT
-  tft.init();
-  tft.setRotation(4);
-  connectToWiFi();
+  screen.init();
+  screen.setRotation(4);
   // Data
   fetchHistoricalData(selectedCoinIndex);
-  updateALLCoinsArray();
+  updateALLCoins();
 }
 void loop() {
   if (button1.pressed()){
     Serial.println("Button pressed! Toggling screen index.");
     screenIndex = (screenIndex + 1) % 2;  // Toggle between 0 and 1
   }
+  // CURSOR
   if (button2.pressed() && screenIndex==0) {
     selectedCoinIndex = (selectedCoinIndex + 1) % numCoins;  // Cycle forward
     // fetchHistoricalData(selectedCoinIndex);
-    buttonFlag = true;
+    buttonFlag = true; // for cursor
   }
 
   updateDisplay();
@@ -127,7 +136,7 @@ void updateCoinArray(int coinIndex) {
   }
   http.end();  // End the HTTP request
 } // single coin http update
-void updateALLCoinsArray(){
+void updateALLCoins(){
   for (int i = 0; i < numCoins; i++) {
       updateCoinArray(i);
     }
@@ -145,24 +154,26 @@ void updateDisplay() {
   unsigned long currentMillis = millis();
   // UPDATE via Timer
   if (currentMillis - previousMillis >= interval) {
-    // tft.fillScreen(TFT_NAVY);
+    // screen.fillScreen(TFT_NAVY);
     myFSM();
     previousMillis = currentMillis;  // Update the timer
   }
   // CHANGE SCREEN via button
   if (lastScreenIndex != screenIndex) {
-    // tft.fillScreen(TFT_GOLD);
+    // screen.fillScreen(TFT_GOLD);
     myFSM();
     lastScreenIndex = screenIndex;  // Update Index
   }
+  // Cursor
   if (buttonFlag){
     myFSM();
     buttonFlag = false;
   }
+  // DATA
   if (currentMillis - previousDataMillis >= dataHistoricalUpdateInterval) {
     // fetchHistoricalData(selectedCoinIndex);
-    
   }
+
   // // DEBUG :
   // Serial.print("Millis diff: ");
   // Serial.println(currentMillis-previousMillis);
@@ -186,7 +197,7 @@ void myFSM(){
 //====CRYPTO_VIEW===============
 void cryptoView() {
   // updateCoinsArrays();
-  tft.fillScreen(TFT_BLACK);  // Clear the screen
+  screen.fillScreen(TFT_BLACK);  // Clear the screen
   displayTitle();
   displayWifiStatus();
   displayCoinInfo(prices, changePercentages);
@@ -194,86 +205,94 @@ void cryptoView() {
 // Display Title and Wi-Fi status
 void displayTitle() {
   String title = "Crypto Tracker";
-  int bannerHeight = 13;
+  int bannerHeight = screen.fontHeight()+2; // 13
   int bannerColor = TFT_RED;
   int titleColor = TFT_WHITE;
-  tft.fillRect(0, 0, tft.width(), bannerHeight, bannerColor);
-  int titleWidth = tft.textWidth(title);
-  int titleX = (tft.width() - titleWidth) / 2;
+  screen.fillRect(startX, startY, WIDTH, bannerHeight, bannerColor);
+  int titleWidth = screen.textWidth(title);
+  int titleX = (WIDTH - titleWidth) / 2;
   int titleY = (bannerHeight - 4) / 2;
-  tft.setTextColor(titleColor, bannerColor);
-  tft.setCursor(titleX, titleY);
-  tft.setTextSize(1);
-  tft.println(title);
+  screen.setTextColor(titleColor, bannerColor);
+  screen.setCursor(titleX, titleY);
+  screen.setTextSize(1);
+  screen.println(title);
 }
 void displayWifiStatus() {
-  int wifiStatusX = tft.width() - 8;
+  int wifiStatusX = screen.width() - 8;
   int wifiStatusY = 7;
   int dot_size = 3;
   if (WiFi.status() == WL_CONNECTED) {
-    tft.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_GREEN);
+    screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_GREEN);
   } else if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_DISCONNECTED) {
-    tft.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_YELLOW);
+    screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_YELLOW);
   } else {
-    tft.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_RED);
+    screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_RED);
   }
 }
 
 void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPosition, int leftPadding) {
   int cursorWidth = 2;  // Cursor thickness
+  // int cursorAreaHeight = yPosition + selectedCoinIndex * (rowHeight + rowMargin);
   int cursorHeight = rowHeight + 1;  //
+  int cursorX = 2;
   
   // Clear previous cursor (full column width)
-  tft.fillRect(0, yPosition + selectedCoinIndex * (rowHeight + rowMargin), cursorWidth, tft.height(), TFT_GREEN);
+  screen.fillRect(cursorX, yPosition - 1, cursorWidth, screen.height(), TFT_GREEN);
 
   // Draw new cursor for the selected coin
-  tft.fillRect(0, yPosition -1 , cursorWidth, cursorHeight, TFT_YELLOW);
+  screen.fillRect(cursorX, yPosition -1 , cursorWidth, cursorHeight, TFT_YELLOW);
 }
 
 // Main function to display coin information
 void displayCoinInfo(float prices[], float changePercentages[]) {
-  int maxWidth = tft.width();
-  int leftPadding = 3;
-  int rightMargin = 2;
+  int maxWidth = WIDTH;
+  int leftPadding = startX + 3; //3
+  int rightMargin = 1;
   int rowHeight = 5;         // Height of the text in a single row
   int rowMargin = 10;         // Margin between rows
-  int yPosition = 16;        // Initial Y position
+  int yPosition = startY + screen.fontHeight() + 2 + 1; // Initial Y position 16 (see displayTitle())
 
   for (int i = 0; i < numCoins; i++) {
     String coinName = getFormattedCoinName(coins[i]);
     float price = prices[i];
+
     if (isnan(price) || price <= 0) {
       price = 0.0;
     }
+    if (price > 100000) price = (int)price; // remove Decimals if price >>>
     String priceText = "$" + String(price, 2);
-    while (tft.textWidth(priceText) > maxWidth / 2) {
+    while (screen.textWidth(priceText) > maxWidth / 2) {
       priceText = "$" + String(price, priceText.length() - 1);
     }
+    // Variables
     float change = changePercentages[i];
     String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
-
-    int coinNameWidth = tft.textWidth(coinName);
-    int priceTextWidth = tft.textWidth(priceText);
-    int changeTextWidth = tft.textWidth(changeText);
+    int coinNameWidth = screen.textWidth(coinName);
+    int priceTextWidth = screen.textWidth(priceText);
+    int changeTextWidth = screen.textWidth(changeText);
     int changeX = maxWidth - changeTextWidth - rightMargin;
     int priceX = changeX - priceTextWidth - 5;
     int coinNameX = leftPadding;
 
-    // Set text color based on selection
-    if (i == selectedCoinIndex) {
-      tft.setTextColor(TFT_BLACK);  // Highlighted coin text color
-    } else {
-      tft.setTextColor(TFT_WHITE);  // Default text color
-    }
+    // Set text color 
+    screen.setTextColor(TFT_WHITE, TFT_BLACK);  // Default text color
+
+      // Set text color based on selection
+    // if (i == selectedCoinIndex) {
+    //   screen.setTextColor(TFT_BLACK);  // Highlighted coin text color
+    // } else {
+    //   screen.setTextColor(TFT_WHITE);  // Default text color
+    // }
+
 
     // Print coin details
-    tft.setCursor(coinNameX, yPosition);
-    tft.print(coinName);
-    tft.setCursor(priceX, yPosition);
-    tft.print(priceText);
-    tft.setCursor(changeX, yPosition);
-    tft.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
-    tft.print(changeText);
+    screen.setCursor(coinNameX, yPosition);
+    screen.print(coinName);
+    screen.setCursor(priceX, yPosition);
+    screen.print(priceText);
+    screen.setCursor(changeX, yPosition);
+    screen.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED, TFT_BLACK);
+    screen.print(changeText);
 
     // Move to the next row
     yPosition += rowHeight + rowMargin;
@@ -292,7 +311,7 @@ void singleCryptoView() {
   //      - displaySingleCryptoInfo  :  (0,0) to (xmax, 20)
   //      - displayCandlestickChart  :  (0,20) to (xmax, 100)
   //
-  tft.fillScreen(TFT_BLACK);  // Clear
+  screen.fillScreen(TFT_BLACK);  // Clear
   displaySingleCryptoInfo(selectedCoinIndex, prices, changePercentages);
   displayCandlestickChart();
   // debugPrintColorfulPixels();
@@ -300,16 +319,16 @@ void singleCryptoView() {
 
 void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercentages[]) {
   // Define drawing area
-  int startX = 0;
-  int startY = 4;
-  int endX = tft.width();
-  int endY = 100; // Set specific height for this display section
+  // int startX = 0;
+  // int startY = 4;
+  // int endX = screen.width();
+  // int endY = 100; // Set specific height for this display section
   int maxWidth = endX - startX; // Maximum width within the defined area
   int leftPadding = 4;
   int rightMargin = 2;
   int yPosition = startY; // Start drawing within the area
   // Clear only the specified area
-  tft.fillRect(startX, startY, maxWidth, endY - startY, TFT_BLACK);
+  // screen.fillRect(startX, startY, maxWidth, endY - startY, TFT_BLACK);
   // GET COIN INFO
   String coinName = getFormattedCoinName(coins[coinIndex]);
   float change = changePercentages[coinIndex];
@@ -317,9 +336,9 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
   float price = prices[coinIndex];
   String priceText = "$" + String(price, 2);
   // Calculate positions for coin name, change percentage, and price
-  int coinNameWidth = tft.textWidth(coinName);
-  int changeTextWidth = tft.textWidth(changeText);
-  int priceTextWidth = tft.textWidth(priceText);
+  int coinNameWidth = screen.textWidth(coinName);
+  int changeTextWidth = screen.textWidth(changeText);
+  int priceTextWidth = screen.textWidth(priceText);
   int changeX = endX - changeTextWidth - rightMargin;
   int coinNameX = startX + leftPadding;
   int priceX = startX + leftPadding; // endX - priceTextWidth - rightMargin;
@@ -327,29 +346,29 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
   if (changeTextWidth > maxWidth - leftPadding - rightMargin) {
     // Truncate change text if necessary
     changeText = changeText.substring(0, maxWidth / 8);  // Adjust length to fit
-    changeTextWidth = tft.textWidth(changeText);  // Recalculate width
+    changeTextWidth = screen.textWidth(changeText);  // Recalculate width
   }
   if (priceTextWidth > maxWidth - leftPadding - rightMargin) {
     // Truncate price text if necessary
     priceText = priceText.substring(0, maxWidth / 8);  // Adjust length to fit
-    priceTextWidth = tft.textWidth(priceText);  // Recalculate width
+    priceTextWidth = screen.textWidth(priceText);  // Recalculate width
   }
   // Set text size for the coin name and percentage change (size 2)
-  tft.setTextSize(2);
+  screen.setTextSize(2);
   // Print the coin name on the left (adjusted for overflow)
-  tft.setCursor(coinNameX, yPosition);
-  tft.setTextColor(TFT_WHITE);
-  tft.print(coinName);
+  screen.setCursor(coinNameX, yPosition);
+  screen.setTextColor(TFT_WHITE);
+  screen.print(coinName);
   // Print the percentage change on the right
-  tft.setCursor(changeX, yPosition);
-  tft.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
-  tft.print(changeText);
+  screen.setCursor(changeX, yPosition);
+  screen.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
+  screen.print(changeText);
   // Move to the next line for the price
   yPosition += 20; // Move down for the next line (adjust based on text size)
   // Print the price on the next line
-  tft.setCursor(priceX, yPosition);
-  tft.setTextColor(TFT_WHITE);
-  tft.print(priceText);
+  screen.setCursor(priceX, yPosition);
+  screen.setTextColor(TFT_WHITE);
+  screen.print(priceText);
 }
 
 void fetchHistoricalData(int coinIndex) {
@@ -398,14 +417,14 @@ void drawCandle(int x, const Candle &candle, int yStart, int yEnd, float minPric
   // Color for up/down candles
   uint32_t bodyColor = (candle.c >= candle.o) ? TFT_GREEN : TFT_RED;
   // Draw the wick
-  tft.fillRect(x + (candleWidth - wickWidth) / 2, yHigh, wickWidth, yLow - yHigh, bodyColor);
+  screen.fillRect(x + (candleWidth - wickWidth) / 2, yHigh, wickWidth, yLow - yHigh, bodyColor);
   // Draw the candle body
-  tft.fillRect(x, yBodyTop, candleWidth, yBodyBottom - yBodyTop, bodyColor);
+  screen.fillRect(x, yBodyTop, candleWidth, yBodyBottom - yBodyTop, bodyColor);
 }
 void displayCandlestickChart() {
   int x = 10;
   int yStart = 50;   
-  int yEnd = tft.height();
+  int yEnd = screen.height();
   
   // Find the min and max prices from the candles
   float minPrice = candles[0].l;
@@ -430,12 +449,12 @@ void displayCryptoScale(float minPrice, float maxPrice, int yStart, int yEnd) {
     float price = minPrice + stepValue * i;
     int yPosition = yEnd - i * stepHeight; // Invert Y since the screen's origin is at the top-left
     // Print price label
-    tft.setCursor(0, yPosition - 8); // Adjust y-position to center the text
-    tft.setTextSize(1);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.print(String(price, 2)); // Print the price with 2 decimal points
+    screen.setCursor(0, yPosition - 8); // Adjust y-position to center the text
+    screen.setTextSize(1);
+    screen.setTextColor(TFT_WHITE, TFT_BLACK);
+    screen.print(String(price, 2)); // Print the price with 2 decimal points
     // Optional: Draw horizontal grid line
-    tft.drawLine(30, yPosition, tft.width(), yPosition, TFT_DARKGREY);
+    screen.drawLine(30, yPosition, screen.width(), yPosition, TFT_DARKGREY);
   }
 }
 
@@ -444,11 +463,11 @@ void displayCryptoScale(float minPrice, float maxPrice, int yStart, int yEnd) {
 
 //===DEBUG====
 void debugPrintColorfulPixels() {
-  for (int y = 0; y < tft.height(); y++) {
+  for (int y = 0; y < screen.height(); y++) {
     // Choose a color gradient based on the y position
-    uint16_t color = tft.color565(y % 32 * 8, y % 64 * 4, y % 128 * 2); // RGB gradient
-    for (int x = 0; x < tft.width(); x++) {
-      tft.drawPixel(x, y, color);
+    uint16_t color = screen.color565(y % 32 * 8, y % 64 * 4, y % 128 * 2); // RGB gradient
+    for (int x = 0; x < screen.width(); x++) {
+      screen.drawPixel(x, y, color);
     }
   }
 }
