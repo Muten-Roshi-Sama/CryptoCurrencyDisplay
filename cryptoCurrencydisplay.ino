@@ -1,4 +1,4 @@
-//V.2
+//V.2.1
 #include <Arduino.h>
 #include <Button.h>
 #include <WiFi.h>
@@ -11,6 +11,7 @@
 #include <esp_http_client.h>
 
 TFT_eSPI screen = TFT_eSPI();  // Initialize TFT screen
+#define TFT_GREY 0x7BEF
 
 // LCD Dimensions : 128x128
 #define STARTX 2
@@ -185,7 +186,7 @@ void updateDisplay() {
   // Battery/Wifi/Time Cycling
   if (currentMillis - InfoCyclingMillis >= interval && screenIndex == 0){  //5000ms
     displayTitle();
-    BWT_CyclingIndex = (BWT_CyclingIndex + 1) % 3;
+    BWT_CyclingIndex = (BWT_CyclingIndex + 1) % 2;
     InfoCyclingMillis = currentMillis;
     Serial.println(BWT_CyclingIndex);
   }
@@ -227,25 +228,32 @@ void displayTitle() {
   int titleColor = TFT_WHITE;
   screen.fillRect(STARTX, STARTY, WIDTH + 2, bannerHeight, bannerColor);
   int titleWidth = screen.textWidth(title);
-  int titleX = (WIDTH - titleWidth) / 2;
+  int titleX = (WIDTH - titleWidth) / 2 - 4;
   int titleY = (bannerHeight - 4) / 2;
   screen.setTextColor(titleColor, bannerColor);
   screen.setCursor(titleX, titleY);
   screen.setTextSize(1);
   screen.println(title);
 
+
+  // Clear the status area before cycling through the data
+  // screen.fillRect(titleX + titleWidth + 1, STARTY, WIDTH, bannerHeight, bannerColor);
+
+
+  displayWifiStatus(bannerHeight); // at left of banner
+
   // CYCLE
   switch (BWT_CyclingIndex){
       case 0:
-        displayWifiStatus(bannerHeight);
+        displayBatteryStatus(titleWidth, titleX, bannerHeight, bannerColor);
+        break;
       case 1:
-        displayBatteryStatus();
-      case 2:
         displayTime(titleX, titleY, titleWidth);
+        break;
     }  
 }
-void displayBatteryStatus(){
-  int batteryLevel = 75;  // Simulate battery level
+void displayBatteryStatus(int titleWidth, int titleX, int bannerHeight, int bannerColor){
+  int batteryLevel = 81;  // Simulate battery level
   // String batteryText = String(batteryLevel) + "%";
   // screen.setTextColor(TFT_WHITE);
   // screen.setCursor(start_X, STARTY + screen.fontHeight() + 5);
@@ -253,32 +261,58 @@ void displayBatteryStatus(){
   // screen.println(batteryText);
 
   // Indicator
-  int innerBatteryHeight = 3;
-  int innerBatteryLength = 9;
-  int margin = 1;
-  uint32_t batteryColor = TFT_SKYBLUE;
-  uint32_t bckgdColor = TFT_WHITE;
-
-  
-  int start_X = WIDTH - innerBatteryLength - 2*margin - 5;
-  int start_Y = STARTY;
-  screen.fillRect(start_X, start_Y, start_X + 13, start_Y + 9, bckgdColor);       // battery background
-
-  int capLength = 1;
+  int batteryBlockHeight = 6; // size of one of the three blocks representing battery state.
+  int batteryBlockLength = 4;
+  int capLength = 2;
   int capHeight = 3;
-  int capStart_X = start_X + 2*margin + innerBatteryLength;
-  int capStart_Y = start_Y+(innerBatteryHeight+2*margin)/2 - 1;
-  screen.fillRect(capStart_X, capStart_Y, capStart_X+capLength, capStart_Y + capHeight, TFT_GREEN); // CAP
+  int margin = 1;
+  int totalLength = (margin + batteryBlockLength)*3 + margin + capLength;
+  int totalHeight = margin + batteryBlockHeight + margin;
+  uint32_t bckgdColor = TFT_WHITE;
+  uint32_t batteryColor = TFT_BLUE;
+  int availableSpace_X = WIDTH - titleX - titleWidth;
 
-  // Blocks
-  if (batteryLevel >80) screen.fillRect(start_X + margin, start_Y + margin, start_X + innerBatteryLength, start_Y + innerBatteryHeight, batteryColor);
-  else if (batteryLevel >40) screen.fillRect(start_X + margin, start_Y + margin, start_X + innerBatteryLength *2/3, start_Y + innerBatteryHeight, batteryColor);
-  else screen.fillRect(start_X + margin, start_Y + margin, start_X + innerBatteryLength *1/3, start_Y + innerBatteryHeight, batteryColor);
+  // erase
+  int endTitle = titleX + titleWidth;   // 91
+  screen.fillRect(endTitle + 1, STARTY, WIDTH, bannerHeight, bannerColor); 
+
+  // battery background
+  int start_X = endTitle + (availableSpace_X - totalLength)/2; //   (WIDTH - endTitle)/2; //endTitle + 2* margin;  //WIDTH - availableSpace + 2*margin;
+  int start_Y = STARTY + margin;
+  int width_X = 3*batteryBlockLength + 4*margin;
+  int height_Y = batteryBlockHeight +2*margin;
+  Serial.println(endTitle);         //91
+  Serial.println(start_X);         // 99
+  Serial.println(availableSpace_X); // 34
+  Serial.println(totalLength);  //18
+  screen.fillRect(start_X, start_Y, width_X, height_Y, bckgdColor);       
+
+  // CAP
+  int capStart_X = start_X + totalLength - capLength;
+  int capStart_Y = start_Y + (totalHeight - capHeight)/2; //start_Y+(batteryBlockHeight+2*margin)/2 - 1;
+  screen.fillRect(capStart_X, capStart_Y, capLength, capHeight, TFT_GREEN); 
+
+  // BatteryBlocks
+  if (batteryLevel >= 80){
+    for (int i = 0; i < 3; i++) {
+      int block_X = start_X + margin + i*(margin + batteryBlockLength);
+      int block_Y = start_Y + margin;
+      int width =   batteryBlockLength;
+      int height =  batteryBlockHeight;
+      screen.fillRect(block_X, block_Y, width, height, batteryColor);
+      // screen.fillRect(start_X + margin + 3, start_Y + margin, start_X + batteryBlockLength - 3, start_Y + batteryBlockHeight, batteryColor);
+      // screen.fillRect(start_X + margin + 6, start_Y + margin, start_X + batteryBlockLength - 0, start_Y + batteryBlockHeight, batteryColor);
+    }
+  } 
+  // else if (batteryLevel >40) {
+  //   screen.fillRect(start_X + margin, start_Y + margin, start_X + batteryBlockLength *2/3, start_Y + batteryBlockHeight, batteryColor);
+  // }
+  // else screen.fillRect(start_X + margin, start_Y + margin, start_X + batteryBlockLength *1/3, start_Y + batteryBlockHeight, batteryColor);
 
 }
 void displayTime(int titleX, int titleY, int titleWidth){
   timeClient.update(); // Update the time from NTP server
-  String timeString = String(timeClient.getHours()) + ":" + String(timeClient.getMinutes());
+  String timeString = String(timeClient.getHours() + 1) + ":" + String(timeClient.getMinutes());
 
   screen.setTextSize(1);
   int start_X = WIDTH - screen.textWidth(timeString) + 2;//(titleX + titleWidth);
@@ -290,9 +324,9 @@ void displayTime(int titleX, int titleY, int titleWidth){
   screen.println(timeString);
 }
 void displayWifiStatus(int bannerHeight) {
-  int wifiStatusX = WIDTH - 8;
-  int wifiStatusY = bannerHeight/2; //7
-  int dot_size = 2;
+  int dot_size = 2;              //Diameter = 4pixels
+  int wifiStatusX = STARTX + 5;
+  int wifiStatusY = bannerHeight/2 + 2; //7
   if (WiFi.status() == WL_CONNECTED) {
     screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_GREEN);
   } else if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_DISCONNECTED) {
@@ -301,6 +335,10 @@ void displayWifiStatus(int bannerHeight) {
     screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_RED);
   }
 }
+
+
+
+
 void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPosition, int leftPadding) {
   int cursorWidth = 2;  // Cursor thickness
   // int cursorAreaHeight = yPosition + selectedCoinIndex * (rowHeight + rowMargin);
@@ -397,13 +435,12 @@ void singleCryptoView() {
   displayCryptoChart();
   // debugPrintColorfulPixels();
 }
-
 void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercentages[]) {
   // Define drawing area
   int leftPadding = 4;
   int rightMargin = 1;
   int yPosition = STARTY + 1; // Start drawing within the area
-  int verticalMargin = yPosition + 15;  // Between name and price.
+  int verticalMargin = 15;  // Between name and price.
 
   // GET COIN INFO
   String coinName = getFormattedCoinName(coins[coinIndex]);
@@ -444,11 +481,10 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
   screen.print(changeText);
 
   // PRICE
-  screen.setCursor(priceX, verticalMargin);
-  screen.setTextColor(TFT_WHITE);
+  screen.setCursor(priceX, yPosition + verticalMargin);
+  screen.setTextColor(TFT_GREY);
   screen.print(priceText);
 }
-
 void fetchHistoricalData(int coinIndex) {
   const char* binanceEndpoint = "https://api.binance.com/api/v3/klines";
   // Build the URL for Binance API request
@@ -501,7 +537,8 @@ void drawCandle(int x, const Candle &candle, int yStart, int yEnd, float minPric
 }
 void displayCryptoChart() {
   int x = STARTX;
-  int yStart = STARTY + 1 + 15;   //see displaySingleCryptoInfo()
+  int verticalMargin = 15; 
+  int yStart = STARTY + verticalMargin + 2*screen.fontHeight() + 1;   //see displaySingleCryptoInfo()
   int yEnd = HEIGHT;
   
   // Find the min and max prices from the candles
@@ -521,7 +558,6 @@ void displayCryptoChart() {
     x += 8; // Increment x position for the next candle
   }
 }
-
 void displayCryptoScale(float minPrice, float maxPrice, int yStart, int yEnd) {
   int scaleSteps = 5; // Number of labels to display on the scale
   float stepValue = (maxPrice - minPrice) / (scaleSteps - 1);
