@@ -1,4 +1,4 @@
-//V.2.1
+//V.2.2
 #include <Arduino.h>
 #include <Button.h>
 #include <WiFi.h>
@@ -22,8 +22,8 @@ int WIDTH = ENDX - STARTX;    //125
 int HEIGHT = ENDY - STARTY;  //`127
 
 // WiFi Credentials
-const char* ssid = "REDACTED";
-const char* pswd = "REDACTED";
+const char* ssid = "";
+const char* pswd = "";
 
 // Coins to display (MAX. 7)
 const char* coins[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "USDCUSDT", "BUSDUSDT"};
@@ -254,56 +254,85 @@ void displayTitle() {
 }
 void displayBatteryStatus(int titleWidth, int titleX, int bannerHeight, int bannerColor){
   int batteryLevel = 81;  // Simulate battery level
+  int bckgdColor = TFT_WHITE;
+  int batteryColor = TFT_GREEN;
   // String batteryText = String(batteryLevel) + "%";
   // screen.setTextColor(TFT_WHITE);
   // screen.setCursor(start_X, STARTY + screen.fontHeight() + 5);
   // screen.setTextSize(1);
   // screen.println(batteryText);
 
-  // Indicator
-  int batteryBlockHeight = 6; // size of one of the three blocks representing battery state.
-  int batteryBlockLength = 4;
-  int capLength = 2;
-  int capHeight = 3;
-  int margin = 1;
-  int totalLength = (margin + batteryBlockLength)*3 + margin + capLength;
-  int totalHeight = margin + batteryBlockHeight + margin;
-  uint32_t bckgdColor = TFT_WHITE;
-  uint32_t batteryColor = TFT_BLUE;
-  int availableSpace_X = WIDTH - titleX - titleWidth;
 
-  // erase
+  // Dimensions
   int endTitle = titleX + titleWidth;   // 91
-  screen.fillRect(endTitle + 1, STARTY, WIDTH, bannerHeight, bannerColor); 
+  int available_Width = WIDTH - endTitle; // 34
+  int available_Height = bannerHeight;
+
+  
+
+  // Indicator
+  // int margin = 1;
+  // int batteryBlockHeight = 6; // size of one of the three blocks representing battery state.
+  // int batteryBlockLength = 4;
+  // int capLength = 2;
+  // int capHeight = 3;
+
+  // Battery dimensions
+  int margin = 1;  // Margin between blocks and edges
+  int totalLength = available_Width *3/5; // 1/5 each side for padding      (margin + batteryBlockLength)*3 + margin + capLength;
+  int totalHeight = available_Height - 2*2*margin;  //margin + batteryBlockHeight + margin;
+
+
+  // Dynamically scale dimensions
+  int capLength = margin * 2 ;//batteryBlockLength / 2;                // Cap length
+  int batteryBlockLength = (totalLength - capLength - 4*margin)/3; //max(6, available_Width / 25); // Scale block length dynamically
+
+  int batteryBlockHeight = totalHeight- 2*margin;    //max(4, available_Height / 5 +1);  // Scale height based on banner height
+  int capHeight = batteryBlockHeight / 2 + 2;       // Cap height
+
+  
+  
+  
+  // Clear the area
+  screen.fillRect(endTitle + 1, STARTY, available_Width, bannerHeight, bannerColor);
+  
 
   // battery background
-  int start_X = endTitle + (availableSpace_X - totalLength)/2; //   (WIDTH - endTitle)/2; //endTitle + 2* margin;  //WIDTH - availableSpace + 2*margin;
-  int start_Y = STARTY + margin;
-  int width_X = 3*batteryBlockLength + 4*margin;
-  int height_Y = batteryBlockHeight +2*margin;
+  int start_X = endTitle + (available_Width - totalLength)/2 + 2*margin; //   (WIDTH - endTitle)/2; //endTitle + 2* margin;  //WIDTH - availableSpace + 2*margin;
+  // int start_Y = STARTY + margin;
+  int start_Y = STARTY + (available_Height - totalHeight) / 2; //+margin;
+  int width_X = totalLength - capLength; //3*batteryBlockLength + 4*margin;
+  int height_Y = totalHeight; //batteryBlockHeight +2*margin;
   Serial.println(endTitle);         //91
   Serial.println(start_X);         // 99
-  Serial.println(availableSpace_X); // 34
+  Serial.println(available_Width); // 34
+  Serial.println(available_Height); // 
   Serial.println(totalLength);  //18
   screen.fillRect(start_X, start_Y, width_X, height_Y, bckgdColor);       
 
   // CAP
   int capStart_X = start_X + totalLength - capLength;
   int capStart_Y = start_Y + (totalHeight - capHeight)/2; //start_Y+(batteryBlockHeight+2*margin)/2 - 1;
-  screen.fillRect(capStart_X, capStart_Y, capLength, capHeight, TFT_GREEN); 
+  screen.fillRect(capStart_X, capStart_Y, capLength, capHeight, TFT_BLACK); 
 
   // BatteryBlocks
-  if (batteryLevel >= 80){
-    for (int i = 0; i < 3; i++) {
-      int block_X = start_X + margin + i*(margin + batteryBlockLength);
-      int block_Y = start_Y + margin;
-      int width =   batteryBlockLength;
-      int height =  batteryBlockHeight;
-      screen.fillRect(block_X, block_Y, width, height, batteryColor);
-      // screen.fillRect(start_X + margin + 3, start_Y + margin, start_X + batteryBlockLength - 3, start_Y + batteryBlockHeight, batteryColor);
-      // screen.fillRect(start_X + margin + 6, start_Y + margin, start_X + batteryBlockLength - 0, start_Y + batteryBlockHeight, batteryColor);
-    }
-  } 
+  int blocksToFill = (batteryLevel >= 80) ? 3 : (batteryLevel >= 50) ? 2 : (batteryLevel >= 20) ? 1 : 0;
+  for (int i = 0; i < blocksToFill; i++) {
+    int block_X = start_X + margin + i * (margin + batteryBlockLength);
+    int block_Y = start_Y + margin;
+    screen.fillRect(block_X, block_Y, batteryBlockLength, batteryBlockHeight, batteryColor);
+  }
+  // if (batteryLevel >= 80){
+  //   for (int i = 0; i < 3; i++) {
+  //     int block_X = start_X + margin + i*(margin + batteryBlockLength);
+  //     int block_Y = start_Y + margin;
+  //     int width =   batteryBlockLength;
+  //     int height =  batteryBlockHeight;
+  //     screen.fillRect(block_X, block_Y, width, height, batteryColor);
+  //     // screen.fillRect(start_X + margin + 3, start_Y + margin, start_X + batteryBlockLength - 3, start_Y + batteryBlockHeight, batteryColor);
+  //     // screen.fillRect(start_X + margin + 6, start_Y + margin, start_X + batteryBlockLength - 0, start_Y + batteryBlockHeight, batteryColor);
+  //   }
+  // } 
   // else if (batteryLevel >40) {
   //   screen.fillRect(start_X + margin, start_Y + margin, start_X + batteryBlockLength *2/3, start_Y + batteryBlockHeight, batteryColor);
   // }
