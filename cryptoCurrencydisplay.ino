@@ -1,7 +1,9 @@
-//V.1
+//V.2
 #include <Arduino.h>
 #include <Button.h>
 #include <WiFi.h>
+#include <NTPClient.h>
+#include <WiFiUdp.h>
 #include <TFT_eSPI.h>
 #include <SPI.h>
 #include <ArduinoJson.h>
@@ -13,28 +15,29 @@ TFT_eSPI screen = TFT_eSPI();  // Initialize TFT screen
 // LCD Dimensions : 128x128
 #define STARTX 2
 #define STARTY 2
-#define endX 127
-#define endY 129
-int WIDTH = endX - STARTX;    //125
-int HEIGHT = endY - STARTY;  //`127
+#define ENDX 127
+#define ENDY 129
+int WIDTH = ENDX - STARTX;    //125
+int HEIGHT = ENDY - STARTY;  //`127
 
 // WiFi Credentials
-const char* ssid = "";
-const char* pswd = "";
+const char* ssid = "REDACTED";
+const char* pswd = "REDACTED";
 
-// Coins to display
+// Coins to display (MAX. 7)
 const char* coins[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "USDCUSDT", "BUSDUSDT"};
 const int numCoins = sizeof(coins) / sizeof(coins[0]);
 float prices[numCoins] = {0.0};
 float changePercentages[numCoins] = {0.0};
 uint16_t coinColors[] = {TFT_GOLD, TFT_SKYBLUE, TFT_RED, TFT_GREEN, TFT_CYAN, TFT_PINK, TFT_MAGENTA, TFT_GREENYELLOW, TFT_VIOLET};
-int selectedCoinIndex = 0; // with button2, change which coin to display in single view
+int selectedCoinIndex = 0; // Cursor with button2, change which coin to display in single view
+int lastSelectedCoinIndex = 0;
 
 // Button pin setup
 Button button1(19);
 Button button2(21);
 Button button3(22);
-bool buttonFlag = false;
+bool buttonFlag = false; //for cursor button.
 
 // Screen cycle state
 int screenIndex = 0;  // 0: Coin Info Screen, 1: Wi-Fi Info Screen, 2: Title Screen
@@ -42,13 +45,22 @@ int lastScreenIndex = 0;
 
 // Global Millis Variables for Screen Update
 unsigned long previousMillis = 0;  // Global timer to track screen update intervals
-const unsigned long interval = 5000;  
+const unsigned long interval = 5000;  // .. 
 
 // Global Millis Variables for Data Update
 unsigned long previousDataMillis = 0;  // Timer for data update
 const unsigned long dataUpdateInterval = 9000;  // Update coin data every 30 seconds
 
-// CHART
+// TIME
+const char* ntpServer = "pool.ntp.org";   // NTP configuration
+const long utcOffsetInSeconds = 0;     // Adjust for your time zone, UTC = 0 for GMT
+WiFiUDP udp;
+NTPClient timeClient(udp, ntpServer, utcOffsetInSeconds, 30000);  // Fetch time every 30 seconds
+int BWT_CyclingIndex = 0;
+int InfoCyclingMillis = 0; // 0 = Wi-Fi, 1 = Battery, 2 = Time
+
+// CANDLE CHART
+const unsigned long dataHistoricalUpdateInterval = 11000;
 struct Candle {
   float o;  // Open price
   float h;  // High price
@@ -57,13 +69,9 @@ struct Candle {
   float v;  // Volume
 };
 Candle candles[100];  // Array to store candle data (modify size as needed)
-const unsigned long dataHistoricalUpdateInterval = 11000;
-
-// Binance API endpoint and parameters
 const char* chart_interval = "1h";     // 1-hour interval
-const int limit = 24;            // Number of data points (last 24 hours)
-// Array to store hourly closing prices
-float hourlyPrices[24];
+const int limit = 24;                 // Number of data points (last 24 hours)
+float hourlyPrices[24];             // Array to store hourly closing prices
 
 //=======================================================================================
 void setup() {
@@ -79,32 +87,30 @@ void setup() {
   // Data
   fetchHistoricalData(selectedCoinIndex);
   updateALLCoins();
+  // Time
+  timeClient.begin();    // Start NTPClient to get the time
+  timeClient.update();  // Set initial time (Optional, but ensures time starts from a known point)
 }
 void loop() {
   if (button1.pressed()){
     Serial.println("Button pressed! Toggling screen index.");
     screenIndex = (screenIndex + 1) % 2;  // Toggle between 0 and 1
+    
   }
   // CURSOR
   if (button2.pressed() && screenIndex==0) {
     selectedCoinIndex = (selectedCoinIndex + 1) % numCoins;  // Cycle forward
-    // fetchHistoricalData(selectedCoinIndex);
     buttonFlag = true; // for cursor
   }
-
   updateDisplay();
-  // updateCoinArray_BackgroundLoop();
-
-  // Debug: Direct button state
-  // Serial.print("Current button state: ");
-  // Serial.println(digitalRead(buttonPin));
-  // unsigned long currentMillis = millis();
-  // Serial.print("Millis diff: ");
-  // Serial.println(currentMillis-previousMillis);
-  // Serial.print("Current screenIndex: ");
-  // Serial.println(screenIndex);
 }
-//=======================================================================================
+
+
+
+
+
+
+//=============================GENERAL==========================================================
 void connectToWiFi() {
   Serial.print("Connecting to Wi-Fi...");
   WiFi.begin(ssid, pswd);
@@ -149,7 +155,10 @@ String getFormattedCoinName(const char* coinSymbol) {
   return coinName;
 }
 
-//=======Updates_MILLIS()=======
+
+
+
+//===================================Updates_MILLIS()=================================================
 void updateDisplay() {
   unsigned long currentMillis = millis();
   // UPDATE via Timer
@@ -158,13 +167,13 @@ void updateDisplay() {
     myFSM();
     previousMillis = currentMillis;  // Update the timer
   }
-  // CHANGE SCREEN via button
+  // BUTTON 1 : CHANGE SCREEN via button
   if (lastScreenIndex != screenIndex) {
     // screen.fillScreen(TFT_GOLD);
     myFSM();
     lastScreenIndex = screenIndex;  // Update Index
   }
-  // Cursor
+  // BUTTON 2 : Cursor
   if (buttonFlag){
     myFSM();
     buttonFlag = false;
@@ -172,6 +181,13 @@ void updateDisplay() {
   // DATA
   if (currentMillis - previousDataMillis >= dataHistoricalUpdateInterval) {
     // fetchHistoricalData(selectedCoinIndex);
+  }
+  // Battery/Wifi/Time Cycling
+  if (currentMillis - InfoCyclingMillis >= interval && screenIndex == 0){  //5000ms
+    displayTitle();
+    BWT_CyclingIndex = (BWT_CyclingIndex + 1) % 3;
+    InfoCyclingMillis = currentMillis;
+    Serial.println(BWT_CyclingIndex);
   }
 
   // // DEBUG :
@@ -194,21 +210,22 @@ void myFSM(){
 }
 
 
-//====CRYPTO_VIEW===============
+
+
+//================================CRYPTO_VIEW=========================================================
 void cryptoView() {
   // updateCoinsArrays();
   screen.fillScreen(TFT_BLACK);  // Clear the screen
   displayTitle();
-  displayWifiStatus();
   displayCoin(prices, changePercentages);
 }
 // Display Title and Wi-Fi status
 void displayTitle() {
-  String title = "Crypto Tracker";
+  String title = "CryptoTrack";
   int bannerHeight = screen.fontHeight()+3; // 13
   int bannerColor = TFT_RED;
   int titleColor = TFT_WHITE;
-  screen.fillRect(STARTX, STARTY, WIDTH, bannerHeight, bannerColor);
+  screen.fillRect(STARTX, STARTY, WIDTH + 2, bannerHeight, bannerColor);
   int titleWidth = screen.textWidth(title);
   int titleX = (WIDTH - titleWidth) / 2;
   int titleY = (bannerHeight - 4) / 2;
@@ -216,10 +233,65 @@ void displayTitle() {
   screen.setCursor(titleX, titleY);
   screen.setTextSize(1);
   screen.println(title);
+
+  // CYCLE
+  switch (BWT_CyclingIndex){
+      case 0:
+        displayWifiStatus(bannerHeight);
+      case 1:
+        displayBatteryStatus();
+      case 2:
+        displayTime(titleX, titleY, titleWidth);
+    }  
 }
-void displayWifiStatus() {
-  int wifiStatusX = screen.width() - 8;
-  int wifiStatusY = 7;
+void displayBatteryStatus(){
+  int batteryLevel = 75;  // Simulate battery level
+  // String batteryText = String(batteryLevel) + "%";
+  // screen.setTextColor(TFT_WHITE);
+  // screen.setCursor(start_X, STARTY + screen.fontHeight() + 5);
+  // screen.setTextSize(1);
+  // screen.println(batteryText);
+
+  // Indicator
+  int innerBatteryHeight = 3;
+  int innerBatteryLength = 9;
+  int margin = 1;
+  uint32_t batteryColor = TFT_SKYBLUE;
+  uint32_t bckgdColor = TFT_WHITE;
+
+  
+  int start_X = WIDTH - innerBatteryLength - 2*margin - 5;
+  int start_Y = STARTY;
+  screen.fillRect(start_X, start_Y, start_X + 13, start_Y + 9, bckgdColor);       // battery background
+
+  int capLength = 1;
+  int capHeight = 3;
+  int capStart_X = start_X + 2*margin + innerBatteryLength;
+  int capStart_Y = start_Y+(innerBatteryHeight+2*margin)/2 - 1;
+  screen.fillRect(capStart_X, capStart_Y, capStart_X+capLength, capStart_Y + capHeight, TFT_GREEN); // CAP
+
+  // Blocks
+  if (batteryLevel >80) screen.fillRect(start_X + margin, start_Y + margin, start_X + innerBatteryLength, start_Y + innerBatteryHeight, batteryColor);
+  else if (batteryLevel >40) screen.fillRect(start_X + margin, start_Y + margin, start_X + innerBatteryLength *2/3, start_Y + innerBatteryHeight, batteryColor);
+  else screen.fillRect(start_X + margin, start_Y + margin, start_X + innerBatteryLength *1/3, start_Y + innerBatteryHeight, batteryColor);
+
+}
+void displayTime(int titleX, int titleY, int titleWidth){
+  timeClient.update(); // Update the time from NTP server
+  String timeString = String(timeClient.getHours()) + ":" + String(timeClient.getMinutes());
+
+  screen.setTextSize(1);
+  int start_X = WIDTH - screen.textWidth(timeString) + 2;//(titleX + titleWidth);
+  int start_Y = titleY+1;
+
+  screen.setTextColor(TFT_WHITE);
+  screen.setCursor(start_X, start_Y);
+  screen.setTextSize(1);
+  screen.println(timeString);
+}
+void displayWifiStatus(int bannerHeight) {
+  int wifiStatusX = WIDTH - 8;
+  int wifiStatusY = bannerHeight/2; //7
   int dot_size = 2;
   if (WiFi.status() == WL_CONNECTED) {
     screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_GREEN);
@@ -229,7 +301,6 @@ void displayWifiStatus() {
     screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_RED);
   }
 }
-
 void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPosition, int leftPadding) {
   int cursorWidth = 2;  // Cursor thickness
   // int cursorAreaHeight = yPosition + selectedCoinIndex * (rowHeight + rowMargin);
@@ -242,7 +313,6 @@ void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPos
   // CURSOR
   screen.fillRect(cursorX, cursorY, cursorWidth, cursorHeight, TFT_YELLOW);
 }
-
 // Main function to display coin information
 void displayCoin(float prices[], float changePercentages[]) {
   int leftPadding = STARTX + 3; //3
@@ -309,43 +379,47 @@ void displayCoin(float prices[], float changePercentages[]) {
 
 
 
-//====Single_Crypto_View======
+//==================================Single_Crypto_View=========================================================
 void singleCryptoView() {
   // AREA :
   //      - displaySingleCryptoInfo  :  (0,0) to (xmax, 20)
-  //      - displayCandlestickChart  :  (0,20) to (xmax, 100)
+  //      - displayCryptoChart  :  (0,20) to (xmax, 100)
   //
   screen.fillScreen(TFT_BLACK);  // Clear
   displaySingleCryptoInfo(selectedCoinIndex, prices, changePercentages);
-  displayCandlestickChart();
+
+  // UPDATE crypto candles array
+  if(selectedCoinIndex != lastSelectedCoinIndex) {
+      fetchHistoricalData(selectedCoinIndex);
+      lastSelectedCoinIndex = selectedCoinIndex;
+    }
+  //chart
+  displayCryptoChart();
   // debugPrintColorfulPixels();
 }
 
 void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercentages[]) {
   // Define drawing area
-  // int startX = 0;
-  // int startY = 4;
-  // int endX = screen.width();
-  // int endY = 100; // Set specific height for this display section
-  int WIDTH = endX - STARTX; // Maximum width within the defined area
   int leftPadding = 4;
-  int rightMargin = 2;
-  int yPosition = STARTY; // Start drawing within the area
-  // Clear only the specified area
-  // screen.fillRect(startX, startY, WIDTH, endY - startY, TFT_BLACK);
+  int rightMargin = 1;
+  int yPosition = STARTY + 1; // Start drawing within the area
+  int verticalMargin = yPosition + 15;  // Between name and price.
+
   // GET COIN INFO
   String coinName = getFormattedCoinName(coins[coinIndex]);
   float change = changePercentages[coinIndex];
   String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
   float price = prices[coinIndex];
   String priceText = "$" + String(price, 2);
+
   // Calculate positions for coin name, change percentage, and price
   int coinNameWidth = screen.textWidth(coinName);
   int changeTextWidth = screen.textWidth(changeText);
   int priceTextWidth = screen.textWidth(priceText);
-  int changeX = endX - changeTextWidth - rightMargin;
+  int changeX = ENDX - changeTextWidth - rightMargin;
   int coinNameX = STARTX + leftPadding;
-  int priceX = STARTX + leftPadding; // endX - priceTextWidth - rightMargin;
+  int priceX = STARTX + leftPadding; // ENDX - priceTextWidth - rightMargin;
+
   // FORMATTING
   if (changeTextWidth > WIDTH - leftPadding - rightMargin) {
     // Truncate change text if necessary
@@ -357,20 +431,20 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
     priceText = priceText.substring(0, WIDTH / 8);  // Adjust length to fit
     priceTextWidth = screen.textWidth(priceText);  // Recalculate width
   }
-  // Set text size for the coin name and percentage change (size 2)
+
+  // CoinName and percentage change (size 2)
   screen.setTextSize(2);
-  // Print the coin name on the left (adjusted for overflow)
   screen.setCursor(coinNameX, yPosition);
   screen.setTextColor(TFT_WHITE);
   screen.print(coinName);
-  // Print the percentage change on the right
+
+  // % % %
   screen.setCursor(changeX, yPosition);
   screen.setTextColor(change >= 0 ? TFT_GREEN : TFT_RED);
   screen.print(changeText);
-  // Move to the next line for the price
-  yPosition += 20; // Move down for the next line (adjust based on text size)
-  // Print the price on the next line
-  screen.setCursor(priceX, yPosition);
+
+  // PRICE
+  screen.setCursor(priceX, verticalMargin);
   screen.setTextColor(TFT_WHITE);
   screen.print(priceText);
 }
@@ -425,10 +499,10 @@ void drawCandle(int x, const Candle &candle, int yStart, int yEnd, float minPric
   // Draw the candle body
   screen.fillRect(x, yBodyTop, candleWidth, yBodyBottom - yBodyTop, bodyColor);
 }
-void displayCandlestickChart() {
-  int x = 10;
-  int yStart = 50;   
-  int yEnd = screen.height();
+void displayCryptoChart() {
+  int x = STARTX;
+  int yStart = STARTY + 1 + 15;   //see displaySingleCryptoInfo()
+  int yEnd = HEIGHT;
   
   // Find the min and max prices from the candles
   float minPrice = candles[0].l;
@@ -437,13 +511,17 @@ void displayCandlestickChart() {
     if (candles[i].l < minPrice) minPrice = candles[i].l;
     if (candles[i].h > maxPrice) maxPrice = candles[i].h;
   }
+
+  //Scale - work in progress...
   // displayCryptoScale(minPrice, maxPrice, yStart, yEnd);
+  
   // Draw each candle
   for (int i = 0; i < limit; i++) {
     drawCandle(x, candles[i], yStart, yEnd, minPrice, maxPrice);
     x += 8; // Increment x position for the next candle
   }
 }
+
 void displayCryptoScale(float minPrice, float maxPrice, int yStart, int yEnd) {
   int scaleSteps = 5; // Number of labels to display on the scale
   float stepValue = (maxPrice - minPrice) / (scaleSteps - 1);
@@ -465,7 +543,7 @@ void displayCryptoScale(float minPrice, float maxPrice, int yStart, int yEnd) {
 
 
 
-//===DEBUG====
+//====================================DEBUG============================================================
 void debugPrintColorfulPixels() {
   for (int y = 0; y < screen.height(); y++) {
     // Choose a color gradient based on the y position
