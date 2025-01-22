@@ -1,4 +1,4 @@
-//V.2.2
+//V.2.3
 #include <Arduino.h>
 #include <Button.h>
 #include <WiFi.h>
@@ -22,8 +22,17 @@ int WIDTH = ENDX - STARTX;    //125
 int HEIGHT = ENDY - STARTY;  //`127
 
 // WiFi Credentials
-const char* ssid = "";
-const char* pswd = "";
+// WiFi Credentials
+struct WiFiCredential {
+  const char* ssid;
+  const char* pswd;
+};
+
+// List of Wi-Fi networks and passwords
+WiFiCredential wifiList[] = {
+  {"", ""},
+  {"", ""}
+};
 
 // Coins to display (MAX. 7)
 const char* coins[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "USDCUSDT", "BUSDUSDT"};
@@ -112,15 +121,50 @@ void loop() {
 
 
 //=============================GENERAL==========================================================
+// void connectToWiFi() {
+//   Serial.print("Connecting to Wi-Fi...");
+//   WiFi.begin(ssid, pswd);
+//   while (WiFi.status() != WL_CONNECTED) {
+//     delay(1000);
+//     Serial.print(".");
+//   }
+//   Serial.println("\nConnected to Wi-Fi");
+//   Serial.println(WiFi.localIP());
+// }
+// Function to connect to Wi-Fi
 void connectToWiFi() {
-  Serial.print("Connecting to Wi-Fi...");
-  WiFi.begin(ssid, pswd);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(1000);
-    Serial.print(".");
+  Serial.println("Starting Wi-Fi connection...");
+  
+  // Iterate over the Wi-Fi credentials
+  for (int i = 0; i < sizeof(wifiList) / sizeof(wifiList[0]); i++) {
+    Serial.print("Trying to connect to SSID: ");
+    Serial.println(wifiList[i].ssid);
+
+    WiFi.begin(wifiList[i].ssid, wifiList[i].pswd);
+
+    // Wait for connection or timeout
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 10) {
+      delay(1000);
+      Serial.print(".");
+      attempts++;
+    }
+
+    // Check if connected
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nConnected to Wi-Fi!");
+      Serial.print("SSID: ");
+      Serial.println(wifiList[i].ssid);
+      Serial.print("IP Address: ");
+      Serial.println(WiFi.localIP());
+      return;  // Exit the function after successful connection
+    } else {
+      Serial.println("\nFailed to connect to Wi-Fi.");
+    }
   }
-  Serial.println("\nConnected to Wi-Fi");
-  Serial.println(WiFi.localIP());
+
+  // If no Wi-Fi network could be connected to
+  Serial.println("Unable to connect to any Wi-Fi network.");
 }
 void updateCoinArray(int coinIndex) {
   HTTPClient http;
@@ -222,7 +266,7 @@ void cryptoView() {
 }
 // Display Title and Wi-Fi status
 void displayTitle() {
-  String title = "CryptoTrack";
+  String title = "CryptoTracker";
   int bannerHeight = screen.fontHeight()+3; // 13
   int bannerColor = TFT_RED;
   int titleColor = TFT_WHITE;
@@ -285,10 +329,10 @@ void displayBatteryStatus(int titleWidth, int titleX, int bannerHeight, int bann
 
   // Dynamically scale dimensions
   int capLength = margin * 2 ;//batteryBlockLength / 2;                // Cap length
-  int batteryBlockLength = (totalLength - capLength - 4*margin)/3; //max(6, available_Width / 25); // Scale block length dynamically
+  int batteryBlockLength = round((totalLength - capLength - 4*margin)/3); //max(6, available_Width / 25); // Scale block length dynamically
 
   int batteryBlockHeight = totalHeight- 2*margin;    //max(4, available_Height / 5 +1);  // Scale height based on banner height
-  int capHeight = batteryBlockHeight / 2 + 2;       // Cap height
+  int capHeight = batteryBlockHeight / 2 + 3;       // Cap height
 
   
   
@@ -299,21 +343,20 @@ void displayBatteryStatus(int titleWidth, int titleX, int bannerHeight, int bann
 
   // battery background
   int start_X = endTitle + (available_Width - totalLength)/2 + 2*margin; //   (WIDTH - endTitle)/2; //endTitle + 2* margin;  //WIDTH - availableSpace + 2*margin;
-  // int start_Y = STARTY + margin;
   int start_Y = STARTY + (available_Height - totalHeight) / 2; //+margin;
   int width_X = totalLength - capLength; //3*batteryBlockLength + 4*margin;
   int height_Y = totalHeight; //batteryBlockHeight +2*margin;
-  Serial.println(endTitle);         //91
+  Serial.println(endTitle);         // 91
   Serial.println(start_X);         // 99
-  Serial.println(available_Width); // 34
-  Serial.println(available_Height); // 
-  Serial.println(totalLength);  //18
+  Serial.println(available_Width);    // 34
+  Serial.println(available_Height);  // 11
+  Serial.println(totalLength);      // 20
   screen.fillRect(start_X, start_Y, width_X, height_Y, bckgdColor);       
 
   // CAP
   int capStart_X = start_X + totalLength - capLength;
   int capStart_Y = start_Y + (totalHeight - capHeight)/2; //start_Y+(batteryBlockHeight+2*margin)/2 - 1;
-  screen.fillRect(capStart_X, capStart_Y, capLength, capHeight, TFT_BLACK); 
+  screen.fillRect(capStart_X, capStart_Y, capLength, capHeight, bckgdColor); 
 
   // BatteryBlocks
   int blocksToFill = (batteryLevel >= 80) ? 3 : (batteryLevel >= 50) ? 2 : (batteryLevel >= 20) ? 1 : 0;
@@ -322,23 +365,7 @@ void displayBatteryStatus(int titleWidth, int titleX, int bannerHeight, int bann
     int block_Y = start_Y + margin;
     screen.fillRect(block_X, block_Y, batteryBlockLength, batteryBlockHeight, batteryColor);
   }
-  // if (batteryLevel >= 80){
-  //   for (int i = 0; i < 3; i++) {
-  //     int block_X = start_X + margin + i*(margin + batteryBlockLength);
-  //     int block_Y = start_Y + margin;
-  //     int width =   batteryBlockLength;
-  //     int height =  batteryBlockHeight;
-  //     screen.fillRect(block_X, block_Y, width, height, batteryColor);
-  //     // screen.fillRect(start_X + margin + 3, start_Y + margin, start_X + batteryBlockLength - 3, start_Y + batteryBlockHeight, batteryColor);
-  //     // screen.fillRect(start_X + margin + 6, start_Y + margin, start_X + batteryBlockLength - 0, start_Y + batteryBlockHeight, batteryColor);
-  //   }
-  // } 
-  // else if (batteryLevel >40) {
-  //   screen.fillRect(start_X + margin, start_Y + margin, start_X + batteryBlockLength *2/3, start_Y + batteryBlockHeight, batteryColor);
-  // }
-  // else screen.fillRect(start_X + margin, start_Y + margin, start_X + batteryBlockLength *1/3, start_Y + batteryBlockHeight, batteryColor);
-
-}
+ }
 void displayTime(int titleX, int titleY, int titleWidth){
   timeClient.update(); // Update the time from NTP server
   String timeString = String(timeClient.getHours() + 1) + ":" + String(timeClient.getMinutes());
@@ -511,7 +538,7 @@ void displaySingleCryptoInfo(int coinIndex, float prices[], float changePercenta
 
   // PRICE
   screen.setCursor(priceX, yPosition + verticalMargin);
-  screen.setTextColor(TFT_GREY);
+  screen.setTextColor(TFT_WHITE);
   screen.print(priceText);
 }
 void fetchHistoricalData(int coinIndex) {
