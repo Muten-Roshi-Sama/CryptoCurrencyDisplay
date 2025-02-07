@@ -1,10 +1,10 @@
-//V.2.4-128x160
+//V.2.5-128x160
 
 
 //  TODO :
 //        - Fix lagging after button press
 //        - Fix battery display
-//        - Fix time display
+//        - V.Fix time display
 //        - Fix CryptoCoin alignement
 //        - Upgrade Cursor
 //        - 
@@ -15,7 +15,8 @@
 //        - Find battery level sensor or create battery estimation function.
 //        - 
 //        - Add Loading screen
-//        - 
+//        - WIFI connect only to detected wifis
+
 
 #include <Arduino.h>
 #include <Button.h>
@@ -27,11 +28,14 @@
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
 #include <esp_http_client.h>
+// #include "cryptoBoot.h"
+#include "img/bootLogo.h"  // Include the bootLogo image
+
 
 TFT_eSPI screen = TFT_eSPI();  // Initialize TFT screen
 #define TFT_GREY 0x7BEF
 
-// LCD Dimensions : 128x160
+// LCD Dimensions : 128x128
 #define STARTX 0
 #define STARTY 0
 #define ENDX 160
@@ -40,15 +44,16 @@ int WIDTH = ENDX - STARTX;    //160
 int HEIGHT = ENDY - STARTY;  //`128
 
 // WiFi Credentials
-// WiFi Credentials
 struct WiFiCredential {
   const char* ssid;
   const char* pswd;
 };
-
-// List of Wi-Fi networks and passwords
+bool isConnected = false;
+bool networkScanFlag = false;
+int numNetworks;
+unsigned long lastWifiCheck = 0;
 WiFiCredential wifiList[] = {
-  {"REDACTED","REDACTED"}
+  {"", ""}
 };
 
 // Coins to display (MAX. 7)
@@ -104,8 +109,17 @@ float hourlyPrices[24];             // Array to store hourly closing prices
 
 
 
+// BOOT
+static unsigned long lastUpdateTime = 0;
+unsigned long intervalProgress = 100;  // Speed of loading bar progression
+int curr = 0;  // Tracks progress of loading bar
+bool loadingFinished = false; // Flag to check if loading is finished
+
+
+
 //MAIN
 int bannerHeight;
+int coinsLeftPadding=4;
 
 //SingleCryptoView
 int singleCrypto_Title_Height;
@@ -118,25 +132,27 @@ void setup() {
   // TFT
   screen.init();
   screen.setRotation(1);  // horizontal, pins to the right
-  Serial.print("Width:");
-  Serial.println(WIDTH);
-  Serial.print("Height:");
-  Serial.println(HEIGHT);
-
+  
   connectToWiFi();
   button1.begin();
   button2.begin();
   button3.begin();
 
+  screen.fillScreen(TFT_BLACK);
+  boot();
+  // delay(1800);
+
   
-  // Data
-  fetchHistoricalData(selectedCoinIndex);
-  updateALLCoins();
+  
+  
   // Time
   timeClient.begin();    // Start NTPClient to get the time
   timeClient.update();  // Set initial time (Optional, but ensures time starts from a known point)
 }
+
+
 void loop() {
+
   if (button1.pressed()){
     Serial.println("Button 1 pressed! Toggling screen index.");
     screenIndex = (screenIndex + 1) % 2;  // Toggle between 0 and 1
@@ -148,8 +164,27 @@ void loop() {
     selectedCoinIndex = (selectedCoinIndex + 1) % numCoins;  // Cycle forward
     buttonFlag = true; // for cursor
   }
-  updateDisplay();
+
+  // if(button1.isHold()){Serial.println("Button1 is Hold().");}
+
+  if (millis()-lastWifiCheck >4000) connectToWiFi();
+
+
+  if(isConnected){
+    // Data
+    fetchHistoricalData(selectedCoinIndex);
+    updateALLCoins();
+  }
+
+
+  loadingBar();
+  // connectToWiFi();
+  
+
+  if(isLoadingFinished()) updateDisplay();
+
   // debugPrintColorfulPixels();
+  delay(100);
 }
 
 
@@ -158,55 +193,70 @@ void loop() {
 
 
 //=============================GENERAL==========================================================
+
 void connectToWiFi() {
-  Serial.println("Starting Wi-Fi connection...");
+  if (isConnected) return;  // Exit if already connected
+    static int attempts = 0;  // Track connection attempts
+    static bool connecting = false;
+    static unsigned long lastAttemptTime = 0;
 
-  screen.setTextSize(1);
-  screen.setTextColor(TFT_BLACK, TFT_WHITE);
-  screen.setCursor(WIDTH/3,HEIGHT/2);
-  // Iterate over the Wi-Fi credentials
-  for (int i = 0; i < sizeof(wifiList) / sizeof(wifiList[0]); i++) {
-    Serial.print("Trying to connect to SSID: ");
-    Serial.println(wifiList[i].ssid);
+    
 
-    screen.fillScreen(TFT_WHITE);
-    screen.println("Connecting to :");
-    screen.println(wifiList[i].ssid);
-
-    WiFi.begin(wifiList[i].ssid, wifiList[i].pswd);
-
-    // Wait for connection or timeout
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 10) {
-      delay(1000);
-      Serial.print(".");
-      attempts++;
+    // Scan for Networks
+    if (!networkScanFlag) {  
+        Serial.println("Scanning for networks...");
+        numNetworks = WiFi.scanNetworks();
+        if (numNetworks == 0) {
+            Serial.println("No networks found.");
+            return;
+        } else {
+            Serial.printf("Found %d networks.\n", numNetworks);
+        }
+        networkScanFlag = true; 
     }
 
-    // Check if connected
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("\nConnected to Wi-Fi!");
-      Serial.print("SSID: ");
-      Serial.println(wifiList[i].ssid);
-      Serial.print("IP Address: ");
-      Serial.println(WiFi.localIP());
-
-      screen.fillScreen(TFT_WHITE);
-      screen.setTextSize(1);
-      screen.println("Connected!");
-
-      return;  // Exit the function after successful connection
-    } else {
-      Serial.println("\nFailed to connect to Wi-Fi.");
-      screen.fillScreen(TFT_WHITE);
-      screen.setTextSize(1);
-      screen.println('Network not found.');
+    // Find and connect to wifi from given list
+    if (!connecting) {  
+        for (int i = 0; i < sizeof(wifiList) / sizeof(wifiList[0]); i++) {
+            for (int j = 0; j < numNetworks; j++) {
+                if (WiFi.SSID(j) == wifiList[i].ssid) {
+                    Serial.printf("Connecting to SSID: %s\n", wifiList[i].ssid);
+                    WiFi.begin(wifiList[i].ssid, wifiList[i].pswd);
+                    connecting = true;
+                    attempts = 0;
+                    lastAttemptTime = millis();  // Start connection timer
+                    return;
+                }
+            }
+        }
     }
-  }
 
-  // If no Wi-Fi network could be connected to
-  Serial.println("Unable to connect to any Wi-Fi network.");
+    // Attempt
+    if (connecting) {
+        // Check connection every 500ms without blocking
+        if (millis() - lastAttemptTime >= 2000) {
+            lastAttemptTime = millis(); 
+            if (WiFi.status() == WL_CONNECTED) {
+                Serial.println("\nConnected!");
+                Serial.print("IP Address: ");
+                Serial.println(WiFi.localIP());
+                isConnected = true;
+                connecting = false;
+            } else {
+                Serial.print(".");
+                attempts++;
+                if (attempts >= 10) {  // Try for 10 seconds max (10 * 1000ms)
+                    Serial.println("\nFailed to connect.");
+                    connecting = false;
+                }
+            }
+        }
+    }
 }
+
+
+
+
 void updateCoinArray(int coinIndex) {
   HTTPClient http;
   String url = "https://api.binance.com/api/v3/ticker/24hr?symbol=" + String(coins[coinIndex]);
@@ -294,6 +344,57 @@ void myFSM(){
         break;
     }
 }
+
+
+//===================================BOOT()=================================================
+// Boot function that handles images with glitches (non-blocking)
+void boot() {
+  screen.fillScreen(TFT_BLACK);
+  screen.setSwapBytes(true);
+  int xPos = (160 - 128) / 2;
+
+  screen.pushImage(xPos, 0, img_width, img_height, bootLogo);  // Display boot logo
+  curr = 0;  // Reset the progress bar
+    loadingBar();
+}
+
+// Non-blocking loading bar function (15 segments)
+void loadingBar() {
+    int startY = 105;
+    int startX = 40;
+    int endY = 115;
+    int endX = 120;
+
+    int barNum = 15;  // Total number of bars (segments)
+    int barHeight = (endY - startY) - 2;  // Height of the progress bar
+    int barWidth = (endX - startX) * 3 / 4;  // Width of the progress bar (75% of the rectangle width)
+
+    if(curr > barNum)loadingFinished = true;
+    
+    // Draw progress bar
+    else {
+        screen.drawRect(startX, startY, endX - startX, endY - startY, TFT_WHITE);  // Draw outer rectangle of the bar
+        if (millis() - lastUpdateTime >= intervalProgress){
+            lastUpdateTime = millis();  // Update the time when the progress is updated
+            int barSegmentWidth = barWidth / barNum;  // Width of each bar segment
+
+            // Draw the next segment in the progress bar
+            screen.fillRect(startX + 1 + curr * (barSegmentWidth + 1), startY + 1, barSegmentWidth, barHeight, TFT_GREEN);  
+            curr += 1;  // Move to the next segment
+        }
+    }
+
+
+}
+
+
+bool isLoadingFinished() {
+    return loadingFinished;
+}
+
+
+
+
 
 
 
@@ -432,10 +533,10 @@ void displayWifiStatus(int bannerHeight) {
   int wifiStatusY = bannerHeight/2; //7
   if (WiFi.status() == WL_CONNECTED) {
     screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_GREEN);
-  } else if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_DISCONNECTED) {
-    screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_YELLOW);
+  // } else if (WiFi.status() == WL_IDLE_STATUS || WiFi.status() == WL_CONNECT_FAILED || WiFi.status() == WL_DISCONNECTED) {
+  //   screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_YELLOW);
   } else {
-    screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_RED);
+    screen.fillCircle(wifiStatusX, wifiStatusY, dot_size, TFT_YELLOW);
   }
 }
 
@@ -447,7 +548,7 @@ void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPos
   int cursorWidth = 3;  // Cursor thickness
   // int cursorAreaHeight = yPosition + selectedCoinIndex * (rowHeight + rowMargin);
   int cursorHeight = rowHeight + 1;  //
-  int cursorX = STARTX+2 +6;
+  int cursorX = STARTX + coinsLeftPadding;
   int cursorY = yPosition - 1;
   
   // CLEAR
@@ -457,9 +558,9 @@ void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPos
 }
 // Main function to display coin information
 void displayCoin(float prices[], float changePercentages[]) {
-  int selectedColor = TFT_GOLD;
-  int leftPadding = STARTX + 6 +6; //displayCursor:STARTX+2+cursorWidth=6
-  int rightMargin = 1;
+  int selectedColor = TFT_CYAN;
+  int leftPadding = STARTX + coinsLeftPadding + 6; //displayCursor:6=
+  int rightMargin = 2;
   int rowHeight = screen.fontHeight();      // Height of the text in a single row : 5
   int rowMargin = rowHeight - 1;             // Margin between rows
   int yPosition = STARTY + bannerHeight + 3;
@@ -484,12 +585,12 @@ void displayCoin(float prices[], float changePercentages[]) {
     // Variables
     float change = changePercentages[i];
     String changeText = (change >= 0 ? "+" : "") + String(change, 2) + "%";
-    int coinNameWidth = screen.textWidth(coinName);
+    int coinNameWidth = screen.textWidth("DOGE");
     int priceTextWidth = screen.textWidth(priceText);
     int changeTextWidth = screen.textWidth(changeText);
     int coinNameX = leftPadding;
     int changeX = WIDTH - changeTextWidth - rightMargin;
-    int priceX = changeX - priceTextWidth - 25;
+    int priceX = coinNameX + coinNameWidth + 25;//changeX - priceTextWidth - 25;
     
 
     // Set text color 
