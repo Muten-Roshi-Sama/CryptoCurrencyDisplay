@@ -1,11 +1,7 @@
-//V.2.0-128x160- ESPC3
+//V.1.1-128x160- ESPC3
 
-// Functionnal display equivalent with the ESP32-C3 instead of the ESP32-Wroom-32D
+// Save before Interrupt Driven Buttons Implementation
 //
-// NEW : - Code structure improved for better readability
-//        - Adafruit_GFX, Adafruit_ST7735 Libraries
-// Note: 
-
 // PINOUT:
 // Vcc - 3v3,  GND-GND,  CS-10,  RST-9,  AO/DC-8,  SDA-6,  SCK-4,  LED/BLK-Vcc
 
@@ -49,10 +45,11 @@
 #define TFT_RST       9  // Or set to -1 and connect to Arduino RESET pin
 #define TFT_DC        8
 #define ST77XX_GREY      0x7BEF
-#define ST77XX_GOLD     0xFD20   // Gold
+#define ST77XX_GOLD     0xFFD700 //0xFD20   // Gold  
 #define ST77XX_SKYBLUE  0x87CEEB // Sky Blue
 #define ST77XX_PINK     0xF81F   // Pink
 #define ST77XX_GREENYELLOW 0xA8E4   // Green Yellow
+#define ST77XX_DARKGREEN 0x03E0
 #define ST77XX_VIOLET   0x7F00   // Violet
 Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 
@@ -73,7 +70,7 @@ bool networkScanFlag = false;
 int numNetworks;
 unsigned long lastWifiCheck = 0;
 WiFiCredential wifiList[] = {
-  {"YouReally", "WannaKnow?"
+  
 }; 
 
 
@@ -153,6 +150,11 @@ bool loadingFinished = false;
 
 
 // =============== UI VARIABLES ===============
+#define mainView_bannerColor ST77XX_RED
+#define cursorColor 0x1E90FF   //Dodger blue
+#define highlightColor ST77XX_GOLD
+#define bootLogColor ST77XX_DARKGREEN
+
 int bannerHeight;                               //MAIN VIEW
 int coinsLeftPadding = 4;
 int singleCrypto_Title_Height;;                      //SingleCryptoView
@@ -174,11 +176,13 @@ void setup() {
 
   // Boot()
   screenIndex = 99;
-  myFSM();
+  myFSM();   // prints the boot
   
 
   connectToWiFi();
   buttonsInit();
+
+  
 
   // digitalRainAnim.init(&tft);
   //   digitalRainAnim.pause();
@@ -193,19 +197,28 @@ void setup() {
 
              
 // ====================LOOP_======================================
+int start=0;
 void loop() {
-    
     button1.read();
     button2.read();
 
-    if (millis() - lastWifiCheck > 5000) {   //TODO: fuse behavior into updateDisplay()
-      Serial.println("I'm Alive !");
-        connectToWiFi();
-    }
 
+    start = millis();
+     updateDisplay();
+    Serial.println(millis()-start);
+
+    // if (millis() - lastWifiCheck > 1000) {   //TODO: fuse behavior into updateDisplay()
+    //   Serial.println("I'm Alive !");
+    //   lastWifiCheck = millis();
+        
+    // }
+
+
+    if (!isConnected) connectToWiFi();
     // LOOPS
-    if(isLoadingFinished()) updateDisplay();
-    else loadingBar();
+   
+    // if(isLoadingFinished()) ;
+    // else loadingBar();
 
 
     // digitalRainAnim.loop();
@@ -249,44 +262,54 @@ void B2_Callback_OnPressed() {
 }
 
 
+
+
               
 // =================GENERAL_FUNCTIONS================================
 int textLength;
 int rowNum;
 void connectToWiFi() {
-  lastWifiCheck = millis();
-  if (isConnected) return;  // Exit if already connected
+  // lastWifiCheck = millis();
     static int attempts = 0;  // Track connection attempts
     static bool connecting = false;
     static unsigned long lastAttemptTime = 0;
-
+    loadingBar(); //reload loadingBar()
     
-
+    
     // Scan for Networks
     if (!networkScanFlag) {  
-        Serial.println("Scanning for networks...");
+        bootLog("Scanning for networks...", bootLogColor, 0);
         numNetworks = WiFi.scanNetworks();
         if (numNetworks == 0) {
-            Serial.println("No networks found.");
+            bootLog("No networks found.", ST77XX_RED, 0);
             return;
         } else {
-            Serial.printf("Found %d networks.\n", numNetworks);
-            drawText(0,0,ST77XX_GREEN,String("Found " + String(numNetworks) + " networks."));
+            bootLog(String("Found " + String(numNetworks) + " networks."), bootLogColor, 0);
         }
+        
         networkScanFlag = true; 
     }
+    loadingBar(); //reload loadingBar()
 
     // Find and connect to wifi from given list
     if (!connecting) {  
         for (int i = 0; i < sizeof(wifiList) / sizeof(wifiList[0]); i++) {
             for (int j = 0; j < numNetworks; j++) {
                 if (WiFi.SSID(j) == wifiList[i].ssid) {
-                    String message = String("Connecting to: " + String(wifiList[i].ssid) + ".");
-                    textLength = textWidth(message, tft);
-                    rowNum = (j+1);
-                    Serial.printf("Connecting to SSID: %s\n", wifiList[i].ssid);
-                    drawText(0,rowNum*6,ST77XX_GREEN ,message);
+
+                    bootLog("Connecting to: ", ST77XX_GREEN, 0);
+                    bootLog( String(wifiList[i].ssid) + ".", bootLogColor, 1);
+
+                    // String message = String("Connecting to: " + String(wifiList[i].ssid) + ".");
+                    // textLength = textWidth(message, tft);
+                    // rowNum = (j+1);
+
+                    // Serial.printf("Connecting to SSID: %s\n", wifiList[i].ssid);
+                    // bootLog(message, ST77XX_GREEN, 0);
+
+                    // drawText(0,rowNum*6,ST77XX_GREEN ,message);
                     WiFi.begin(wifiList[i].ssid, wifiList[i].password);
+
                     connecting = true;
                     attempts = 0;
                     lastAttemptTime = millis();  // Start connection timer
@@ -295,6 +318,7 @@ void connectToWiFi() {
             }
         }
     }
+    loadingBar(); //reload loadingBar()
 
     // Attempt
     if (connecting) {
@@ -302,8 +326,8 @@ void connectToWiFi() {
         if (millis() - lastAttemptTime >= 2000) {
             lastAttemptTime = millis(); 
             if (WiFi.status() == WL_CONNECTED) {
-                Serial.println("\nConnected!");
-                drawText(textLength ,rowNum*6,ST77XX_GREEN,"  Connected!");
+                bootLog("Connected!", bootLogColor, 0);
+                
                 Serial.print("IP Address: ");
                 Serial.println(WiFi.localIP());
                 isConnected = true;
@@ -313,8 +337,9 @@ void connectToWiFi() {
                 Serial.print(".");
                 attempts++;
                 if (attempts >= 10) {  // Try for 10 seconds max (10 * 1000ms)
-                    Serial.println("\nFailed to connect.");
-                    drawText(textLength ,rowNum*6,ST77XX_RED,"  Failed to connect.");
+                    // Serial.println("\nFailed to connect.");
+                    bootLog("  Connection Failed.", ST77XX_RED, 2);
+                    // drawText(textLength ,rowNum*6,ST77XX_RED,"  Failed to connect.");
                     connecting = false;
                 }
             }
@@ -328,9 +353,18 @@ void connectToWiFi() {
 void updateDisplay() {
   // ! To be non-blocking to the button reads, only execute ONE task when calling updateDisplay
   //    this ensures that between each tasks, the buttons are read.
-  unsigned long currentMillis = millis();
-  int toUpdate = -1;
 
+  // BOOT
+  if(!isLoadingFinished()){
+    myFSM();
+    return;
+  } 
+
+
+
+  int toUpdate = -1;
+  unsigned long currentMillis = millis();
+  
   // Assign the highest priority task first
   if (lastScreenIndex != screenIndex) toUpdate = 0;   //"ScreenToggleUpdate"
   else if (cursorButtonFlag) toUpdate = 1;           //"CursorUpdate"
@@ -386,12 +420,13 @@ void updateDisplay() {
 
 
     default:
+      Serial.println("PASS");
       break;
   }
 }
 void myFSM(){
-  Serial.print("SreenIndex-FSM: ");
-  Serial.println(screenIndex);
+  // Serial.print("SreenIndex-FSM: ");
+  // Serial.println(screenIndex);
   switch (screenIndex) {
       case 0: 
         cryptoView();  // Coin info screen
@@ -407,7 +442,8 @@ void myFSM(){
         
       case 98:
         loadingBar();
-        Serial.println("OK2");
+        // Serial.println("OK2");
+        if(isLoadingFinished())screenIndex = 0;
         break;
       case 99:  
         boot();
@@ -420,16 +456,6 @@ void myFSM(){
 
 
 //===================================BOOT()=================================================
-// void boot() {
-//   tft.fillScreen(ST77XX_BLACK);
-//   tft.setSwapBytes(true);
-//   int xPos = (160 - 128) / 2;
-
-//   tft.pushImage(xPos, 0, img_width, img_height, bootLogo);  // Display boot logo
-//   curr = 0;  // Reset the progress bar
-//     loadingBar();
-// }  // Boot function that handles images with glitches (non-blocking)
-
 void boot() {
   tft.fillScreen(ST77XX_BLACK);
     int xPos = (160 - 128) / 2;//(tft.width() - IMG_WIDTH) / 2;
@@ -441,12 +467,21 @@ void boot() {
 
 
 void loadingBar() {
-    int startY = 105;
-    int startX = 40;
-    int endY = 115;
-    int endX = 120;
+  // ScreenWidth= 160 = barWidth*100 + 2*batterySides + 2 Padding
 
-    int barNum = 15;  // Total number of bars (segments)
+    // int barNum = 100;
+    // int batterySide = 1; //battery white sides
+    // int barWidth = 
+    // int startX = //round(WIDTH * 1/3.5);  //160pixels * 1cm/3.5cm = 46
+    // int endX = WIDTH - startX;
+
+    int startY = 105;  // don't touch
+    int startX = 30;  //padding
+    int endY = 115;
+    int endX = 130;
+
+
+    int barNum = 30;  // Total number of bars (segments)
     int barHeight = (endY - startY) - 2;  // Height of the progress bar
     int barWidth = (endX - startX) * 3 / 4;  // Width of the progress bar (75% of the rectangle width)
     
@@ -475,7 +510,6 @@ bool isLoadingFinished() {
 
 
 
-
 //================================CRYPTO_VIEW=========================================================
 void cryptoView() {
   // updateCoinsArrays();
@@ -488,7 +522,7 @@ void cryptoView() {
 void displayTitle() {
   String title = "CryptoTracker";
   bannerHeight = textHeight(title, tft)+5; // 13
-  int bannerColor = ST77XX_RED;
+  int bannerColor = mainView_bannerColor;
   int titleColor = ST77XX_WHITE;
   tft.fillRect(STARTX, STARTY, WIDTH, bannerHeight, bannerColor);
 
@@ -616,7 +650,7 @@ void displayWifiStatus(int bannerHeight) {
   }
 }
 void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPosition, int leftPadding) {
-  int cursorColor = ST77XX_MAGENTA;
+  
   int cursorWidth = 3;  // Cursor thickness
   // int cursorAreaHeight = yPosition + selectedCoinIndex * (rowHeight + rowMargin);
   int cursorHeight = rowHeight + 1;  //
@@ -629,7 +663,7 @@ void displayCursor(int selectedCoinIndex, int rowHeight, int rowMargin, int yPos
   tft.fillRect(cursorX, cursorY, cursorWidth, cursorHeight, cursorColor);
 }
 void displayCoin(float prices[], float changePercentages[]) {
-  int selectedColor = ST77XX_CYAN;
+  int selectedColor = highlightColor;
   int leftPadding = STARTX + coinsLeftPadding + 6; //displayCursor:6=
   int rightMargin = 2;
   int rowHeight = textHeight("A", tft);      // Height of the text in a single row : 5
@@ -903,7 +937,16 @@ void drawText(int x, int y, int textColor, String text) {
     tft.setTextColor(textColor);
     tft.println(text);
 }
+void bootLog(String text, int textColor, int Row){
+  Serial.println(text);
 
+  // CLEAR
+  tft.fillRect(0, 0, WIDTH, 20, ST77XX_BLACK);
+
+  // WRITE
+  drawText(0, Row*textHeight("A", tft), textColor, text);
+
+} // MAX 4 ROWS
 
 
 
@@ -915,7 +958,6 @@ int textWidth(String text, Adafruit_GFX &tft) {
   tft.getTextBounds(text.c_str(), 0, 0, &x1, &y1, &w, &h);
   return w;
 }
-
 int textHeight(String text, Adafruit_GFX &tft) {
     int16_t x1, y1;
     uint16_t w, h;
