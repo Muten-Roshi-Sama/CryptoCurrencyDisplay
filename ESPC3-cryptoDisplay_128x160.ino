@@ -1,6 +1,7 @@
-//V.1.1-128x160- ESPC3
+//V.1.2-128x160- ESPC3
 
-// Save before Interrupt Driven Buttons Implementation
+// Functionnal Interrupt Driven Buttons (registers all button presses/holding/... while being non-blocking).
+//        ToFix: still has some display issues (right after pressing buttons, screen is translated ?)
 //
 // PINOUT:
 // Vcc - 3v3,  GND-GND,  CS-10,  RST-9,  AO/DC-8,  SDA-6,  SCK-4,  LED/BLK-Vcc
@@ -70,7 +71,6 @@ bool networkScanFlag = false;
 int numNetworks;
 unsigned long lastWifiCheck = 0;
 WiFiCredential wifiList[] = {
-  
 }; 
 
 
@@ -88,11 +88,11 @@ uint16_t coinColors[] = {
 
 // =============== BUTTON SETTINGS ===============
 #define BUTTON1_PIN  0
-#define BUTTON2_PIN  1
+#define BUTTON2_PIN  2
 
 EasyButton button1(BUTTON1_PIN);    
 EasyButton button2(BUTTON2_PIN);    
-
+bool buttonUpdate;
 bool cursorButtonFlag = false;
 
 // =============== STATE VARIABLES ===============
@@ -100,8 +100,8 @@ int screenIndex = 0;
 int lastScreenIndex = 0;
 int selectedCoinIndex = 0;    
 int lastSelectedCoinIndex = 0;
-int BWT_CyclingIndex = 0;
-int InfoCyclingMillis = 0;
+int infoCyclingIndex = 0;
+int infoCyclingMillis = 0;
 const unsigned long InfoCyclingInterval = 4000;
 
 
@@ -111,10 +111,10 @@ unsigned long previousMillis = 0;
 const unsigned long interval = 5000;
 
 unsigned long previousDataMillis = 0;  
-const unsigned long dataUpdateInterval = 9000;  
+const unsigned long dataUpdateInterval = 8000;  
 
-unsigned long previousCandleMillis = 0;
-const unsigned long candleUpdateInterval = 10000;
+// unsigned long previousCandleMillis = 0;
+// const unsigned long candleUpdateInterval = 100000;
 
 
 // =============== TIME SETTINGS ===============
@@ -151,7 +151,7 @@ bool loadingFinished = false;
 
 // =============== UI VARIABLES ===============
 #define mainView_bannerColor ST77XX_RED
-#define cursorColor 0x1E90FF   //Dodger blue
+#define cursorColor ST77XX_BLUE   //Dodger blue
 #define highlightColor ST77XX_GOLD
 #define bootLogColor ST77XX_DARKGREEN
 
@@ -199,13 +199,10 @@ void setup() {
 // ====================LOOP_======================================
 int start=0;
 void loop() {
-    button1.read();
-    button2.read();
-
-
+    
     start = millis();
      updateDisplay();
-    Serial.println(millis()-start);
+    if(millis()-start>5) Serial.println(millis()-start);
 
     // if (millis() - lastWifiCheck > 1000) {   //TODO: fuse behavior into updateDisplay()
     //   Serial.println("I'm Alive !");
@@ -243,14 +240,27 @@ void buttonsInit() {
     button2.onPressed(B2_Callback_OnPressed);
     button1.onPressedFor(2000, B1_Callback_OnLongPress);
 
+    if (button1.supportsInterrupt()){
+        button1.enableInterrupt(button1ISR);
+        Serial.println("Button 1 will be used through interrupts");
+      }
+    if (button2.supportsInterrupt()){
+        button2.enableInterrupt(button2ISR);
+        Serial.println("Button 2 will be used through interrupts");
+      }
+
     Serial.println("Buttons initialized!");
 }
 void B1_Callback_OnPressed() {
     Serial.println("Button 1 pressed! Toggling screen index.");
+    buttonUpdate = true;
     screenIndex = (screenIndex + 1) % 2;
+    updateDisplay();
 }
 void B1_Callback_OnLongPress() {
     Serial.println("Button1 Long Press!");
+    buttonUpdate = true;
+    updateDisplay();
 }
 void B2_Callback_OnPressed() {
     Serial.print("Button 2 pressed!");
@@ -259,12 +269,19 @@ void B2_Callback_OnPressed() {
         selectedCoinIndex = (selectedCoinIndex + 1) % numCoins;
         cursorButtonFlag = true;
     }
+    buttonUpdate = true;
+    updateDisplay();
+}
+void button1ISR(){
+  button1.read();
+}
+void button2ISR(){
+  button2.read();
 }
 
 
 
-
-              
+             
 // =================GENERAL_FUNCTIONS================================
 int textLength;
 int rowNum;
@@ -370,9 +387,10 @@ void updateDisplay() {
   else if (cursorButtonFlag) toUpdate = 1;           //"CursorUpdate"
   else if (currentMillis - previousMillis >= interval) toUpdate = 2; //"timeOffUpdate"
   else if (currentMillis - previousDataMillis > dataUpdateInterval && isConnected) toUpdate = 3; //"updateCoins"
-  else if (currentMillis - previousCandleMillis >= candleUpdateInterval && isConnected) toUpdate = 4; //"updateCandleChart"
-  else if (currentMillis - InfoCyclingMillis >= InfoCyclingInterval && screenIndex == 0) toUpdate = 5; //"screen1_InfoCycling"
+  // else if (currentMillis - previousCandleMillis >= candleUpdateInterval && isConnected) toUpdate = 4; //"updateCandleChart"
+  else if (currentMillis - infoCyclingMillis >= InfoCyclingInterval && screenIndex == 0) toUpdate = 5; //"screen1_InfoCycling"
 
+  // if(InterruptTask())return;
 
   switch (toUpdate) {
   // BUTTONS UPDATE
@@ -404,29 +422,30 @@ void updateDisplay() {
         Serial.println("Updated all coins.");
       break;
 
-    case 4://"updateCandleChart":
-      fetchHistoricalData(selectedCoinIndex);
-        previousCandleMillis = currentMillis;
-        Serial.println("Fetched historical data.");
-      break;
+    // case 4://"updateCandleChart":
+    //   fetchHistoricalData(selectedCoinIndex);
+    //     previousCandleMillis = currentMillis;
+    //     Serial.println("Fetched historical data.");
+    //   break;
 
   // SCREEN INFO Cycling : Battery/Wifi/Time Cycling
     case 5://"screenInfoCycling":
-      BWT_CyclingIndex = (BWT_CyclingIndex + 1) % 2;
-      InfoCyclingMillis = currentMillis;
+      infoCyclingIndex = (infoCyclingIndex + 1) % 2;
+      infoCyclingMillis = currentMillis;
       displayTitle();
       Serial.println("Battery/WiFi/Time cycled.");
       break;
 
 
     default:
-      Serial.println("PASS");
+      // Serial.println("PASS");
       break;
   }
 }
 void myFSM(){
   // Serial.print("SreenIndex-FSM: ");
   // Serial.println(screenIndex);
+  // readButtons();
   switch (screenIndex) {
       case 0: 
         cryptoView();  // Coin info screen
@@ -493,6 +512,7 @@ void loadingBar() {
         if (millis() - lastUpdateTime >= intervalProgress){
             lastUpdateTime = millis();  // Update the time when the progress is updated
             int barSegmentWidth = barWidth / barNum;  // Width of each bar segment
+            intervalProgress *= 0.8;
 
             // Draw the next segment in the progress bar
             tft.fillRect(startX + 1 + curr * (barSegmentWidth + 1), startY + 1, barSegmentWidth, barHeight, ST77XX_GREEN);  
@@ -515,7 +535,9 @@ void cryptoView() {
   // updateCoinsArrays();
   tft.fillScreen(ST77XX_BLACK);  // Clear the screen
   displayTitle();
+  
   displayCoin(prices, changePercentages); // MUST be after displayTitle...
+  
 }
 
 // DISPLAY
@@ -542,7 +564,7 @@ void displayTitle() {
   displayWifiStatus(bannerHeight); // at left of banner
 
   // CYCLE
-  switch (BWT_CyclingIndex){
+  switch (infoCyclingIndex){
       case 0:
         displayBatteryStatus(titleWidth, titleX, bannerHeight, bannerColor);
         break;
