@@ -1,8 +1,14 @@
 //V.1.2-128x160- ESPC3
 
-// 
-//
-//
+
+
+// Notes :
+//        - at start we update All coins, then one every 5s
+//        - we only store 1 candle chart at the time, when changing screens with a different coin selected, the old coin data is overwritten with the new.
+//        - we could use SPIFFs for long term storage and OFFLINE use...
+//   
+
+
 // PINOUT:
 // Vcc - 3v3,  GND-GND,  CS-10,  RST-9,  AO/DC-8,  SDA-6,  SCK-4,  LED/BLK-Vcc
 
@@ -24,6 +30,8 @@
 //      - 
 
 
+      
+
 
 // =============== LIBRARIES ===============
 #include <Arduino.h>
@@ -37,6 +45,7 @@
 #include <Adafruit_GFX.h>    
 #include <Adafruit_ST7735.h> 
 #include <SPI.h>
+#include <SPIFFS.h>
 
 // ============== header files ============
 #include "settings.h"
@@ -66,6 +75,10 @@ Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_RST);
 enum State {INIT, BOOT, CRYPTOVIEW, CANDLECHART };
 State state = INIT;
 
+enum UpdateState { IDLE, UPDATING_CANDLE, UPDATING_COINS };
+UpdateState updateState = IDLE;
+
+
 int selectedCoinIndex = 0;    
 int lastSelectedCoinIndex = 0;
 int infoCyclingIndex = 0;
@@ -78,7 +91,7 @@ unsigned long previousMillis = 0;
 const unsigned long interval = 5000;
 
 unsigned long previousDataMillis = 0;  
-const unsigned long dataUpdateInterval = 8000;  
+const unsigned long dataUpdateInterval = 5000;  
 
 unsigned long previousCandleMillis = 0;
 const unsigned long candleUpdateInterval = 100000;
@@ -86,12 +99,16 @@ const unsigned long candleUpdateInterval = 100000;
 unsigned long infoCyclingMillis = 0;
 const unsigned long InfoCyclingInterval = 4000;
 
+unsigned long debugMillis = 0;
+const unsigned long debugInterval = 1000;
 
+int start=0;
+int esp = 0;
 
 
 // =============== BOOT VARIABLES ===============
 static unsigned long lastLoadingBar = 0;
-unsigned long loadingProgressSpeed = 200;  
+unsigned long loadingProgressSpeed = 500;  
 int currentProgress = 0;  
 bool loadingFinished = false;  
 
@@ -111,15 +128,22 @@ void setup() {
   tft.initR(INITR_BLACKTAB);  
   tft.setRotation(1);
   tft.fillScreen(ST77XX_BLACK);
+  tft.setTextWrap(false);  // Disable text wrapping
 
-  // Boot()
-  // screenIndex = 99;
-  updateDisplay();   // BOOT
+  // BOOT
+  updateDisplay();   
   
 
   connectToWiFi();
   buttonsInit();
 
+
+  // SPIFFS
+  if (!SPIFFS.begin(true)) {
+    Serial.println("Failed to mount SPIFFS");
+    return;
+  }
+  Serial.println("SPIFFS mounted successfully");
 
   // digitalRainAnim.init(&tft);
   //   digitalRainAnim.pause();
@@ -134,17 +158,15 @@ void setup() {
 
              
 // ==================== LOOP ======================================
-int start=0;
-int esp = 0;
+
 void loop() {
 
 
-  if (!isConnected) connectToWiFi();
-  else updateData();
-    
-    start = millis();
-  updateDisplay();
-    if(millis()-start>5) Serial.println(millis()-start);
+  if (isConnected){
+    updateDisplay();
+    updateData();
+  } else connectToWiFi();
+  
 
 
     // Memory Usage
@@ -154,9 +176,16 @@ void loop() {
         esp=millis();
     }
     
+  // serialDebugPrints
+  if(millis()-debugMillis > 1000){
+    Serial.print("State = ");
+    Serial.print(state);
+    Serial.print(", WiFi: ");
+    Serial.println(isConnected);
 
-  
 
+    debugMillis = millis();
+  }
 
 
     // digitalRainAnim.loop();
@@ -166,13 +195,26 @@ void loop() {
          
 // =================GENERAL_FUNCTIONS================================
 void connectToWiFi() {
+  bool debug=true;
   // lastWifiCheck = millis();
     static int attempts = 0;  // Track connection attempts
     static bool connecting = false;
     static unsigned long lastAttemptTime = 0;
     loadingBar(); //reload loadingBar()
     
-    
+    if(debug){
+      Serial.print("Wifi - connecting: ");
+      Serial.print(connecting);
+      Serial.print(" ,");
+    }
+
+    // Check if Wifi are saved or not.
+    if (sizeof(wifiList) / sizeof(wifiList[0]) == 0) {
+      Serial.println("No Wifi saved.");
+      bootLog("No Wifi saved...", ST77XX_RED, 0);
+      return;
+    }
+   
     // Scan for Networks
     if (!networkScanFlag) {  
         bootLog("Scanning for networks...", bootLogColor, 0);
@@ -186,25 +228,17 @@ void connectToWiFi() {
         
         networkScanFlag = true; 
     }
-    loadingBar(); //reload loadingBar()
+    loadingBar();
 
     // Find and connect to wifi from given list
     if (!connecting) {  
         for (int i = 0; i < sizeof(wifiList) / sizeof(wifiList[0]); i++) {
             for (int j = 0; j < numNetworks; j++) {
-                if (WiFi.SSID(j) == wifiList[i].ssid) {
 
-                    bootLog("Connecting to: ", ST77XX_GREEN, 0);
+                if (WiFi.SSID(j) == wifiList[i].ssid) {
+                    bootLog("Connecting to: ", bootLogColor, 0);
                     bootLog( String(wifiList[i].ssid) + ".", bootLogColor, 1);
 
-                    // String message = String("Connecting to: " + String(wifiList[i].ssid) + ".");
-                    // textLength = textWidth(message, tft);
-                    // rowNum = (j+1);
-
-                    // Serial.printf("Connecting to SSID: %s\n", wifiList[i].ssid);
-                    // bootLog(message, ST77XX_GREEN, 0);
-
-                    // drawText(0,rowNum*6,ST77XX_GREEN ,message);
                     WiFi.begin(wifiList[i].ssid, wifiList[i].password);
 
                     connecting = true;
@@ -212,10 +246,13 @@ void connectToWiFi() {
                     lastAttemptTime = millis();  // Start connection timer
                     return;
                 }
+                else {
+                  bootLog("WiFi not found.", ST77XX_RED, 2);
+                }
             }
         }
     }
-    loadingBar(); //reload loadingBar()
+    loadingBar(); 
 
     // Attempt
     if (connecting) {
@@ -235,7 +272,7 @@ void connectToWiFi() {
                 attempts++;
                 if (attempts >= 10) {  // Try for 10 seconds max (10 * 1000ms)
                     // Serial.println("\nFailed to connect.");
-                    bootLog("  Connection Failed.", ST77XX_RED, 2);
+                    bootLog(" Wifi Connection Failed.", ST77XX_RED, 2);
                     // drawText(textLength ,rowNum*6,ST77XX_RED,"  Failed to connect.");
                     connecting = false;
                 }
@@ -255,26 +292,39 @@ void connectToWiFi() {
 
 
 //=================================== FSM =================================================
-void updateData(){
-  //"updateCandle"
-    if(millis() - previousCandleMillis >= candleUpdateInterval){
-        fetchHistoricalData(selectedCoinIndex);
-        previousCandleMillis = millis();
-        Serial.println("Fetched historical data.");
-    }
 
-  //"updateCoins"
-    if (millis() - previousDataMillis > dataUpdateInterval){
-        updateALLCoins();
-        previousDataMillis = millis();
-        Serial.println("Updated all coins.");
+void updateData() {
+  if (millis() - previousDataMillis >= dataUpdateInterval) {
+    previousDataMillis = millis();
+
+    switch (updateState) {
+      case IDLE:
+        updateState = UPDATING_COINS; // Move to the next task
+        break;
+
+      case UPDATING_COINS:
+        updateNextCoin();
+        updateState = UPDATING_CANDLE; // Move to the next task
+        break;
+
+      case UPDATING_CANDLE:
+        fetchHistoricalData(selectedCoinIndex);
+        updateState = UPDATING_COINS; // Cycle back to the first task
+        break;
+
+      // Add more cases for additional tasks here
     }
+  }
 }
+
+
+
 void updateDisplay() {
+    int start = millis();
+
   switch (state) {
     case INIT :
       boot();
-      // screenIndex = 98;
       state = BOOT;
       break;
 
@@ -301,7 +351,11 @@ void updateDisplay() {
         }
 
       // Time Off Update
-        if (millis() - previousMillis >= interval) cryptoView(); 
+        if (millis() - previousMillis >= interval){
+          cryptoView(); 
+          previousMillis = millis();
+
+        }
       // Battery Time Cycling
         if (millis() - infoCyclingMillis >= InfoCyclingInterval){
           infoCyclingIndex = (infoCyclingIndex + 1) % 2;
@@ -319,128 +373,25 @@ void updateDisplay() {
           state = CRYPTOVIEW;
           cryptoView();
         } 
+
+      // Time Off Update
+        if (millis() - previousMillis >= interval){
+          singleCryptoView(); 
+          previousMillis = millis();
+        } 
+
+
         break;
+  }
+
+  if(millis()-start>100) {
+      Serial.print("Long run time : ");
+      Serial.println(millis()-start);  // print run time if function is blocking.
+    }
 }
-}
 
   
 
-
-
-
-
-//   // BOOT
-//   if(!isLoadingFinished()){
-//     myFSM();
-//     return;
-//   } 
-
-//   // Primary Tasks
-//   if (lastScreenIndex != screenIndex){
-//       myFSM();
-//         lastScreenIndex = screenIndex;  // Update Index
-//   } //toUpdate = 0;   //"ScreenToggleUpdate"
-//   else if (cursorButtonFlag){
-//       myFSM();
-//         cursorButtonFlag = false;
-//         Serial.println("Cursor moved.");
-//   } //toUpdate = 1;           //"CursorUpdate"
-
-//   yield();
-
-//   int toUpdate = -1;
-//   unsigned long currentMillis = millis();
-  
-//   // Assign the highest priority task first
-//   if (currentMillis - previousMillis >= interval) toUpdate = 2; //"timeOffUpdate"
-//   else if (currentMillis - previousDataMillis > dataUpdateInterval && isConnected) toUpdate = 3; //"updateCoins"
-//   else if (currentMillis - previousCandleMillis >= candleUpdateInterval && isConnected) toUpdate = 4; //"updateCandleChart"
-//   else if (currentMillis - infoCyclingMillis >= InfoCyclingInterval && screenIndex == 0) toUpdate = 5; //"screen1_InfoCycling"
-
-//   // if(InterruptTask())return;
-
-//   switch (toUpdate) {
-//   // BUTTONS UPDATE
-//     case 0://"ScreenToggleUpdate":  // B1 : change screens
-//       myFSM();
-//         lastScreenIndex = screenIndex;  // Update Index
-        
-//       break;
-
-//     case 1://"CursorUpdate":  // B2 : Cursor button pressed
-//       myFSM();
-//         cursorButtonFlag = false;
-//         Serial.println("Cursor moved.");
-//       break;
-//   // TIME-OFF UPDATE
-//     case 2://"timeOffUpdate":
-//       myFSM();
-//         previousMillis = currentMillis;
-//         Serial.println("Screen updated via timer.");
-//       break;
-
-  
-
-
-//   // DATA UPDATE
-//     case 3://"updateCoins":
-//       updateALLCoins();
-//         previousDataMillis = currentMillis;
-//         Serial.println("Updated all coins.");
-//       break;
-
-//     case 4://"updateCandleChart":
-//       fetchHistoricalData(selectedCoinIndex);
-//         previousCandleMillis = currentMillis;
-//         Serial.println("Fetched historical data.");
-//       break;
-
-//   // SCREEN INFO Cycling : Battery/Wifi/Time Cycling
-//     case 5://"screenInfoCycling":
-//       infoCyclingIndex = (infoCyclingIndex + 1) % 2;
-//       infoCyclingMillis = currentMillis;
-//       displayTitle();
-//       Serial.println("Battery/WiFi/Time cycled.");
-//       break;
-
-
-//     default:
-//       // Serial.println("PASS");
-//       break;
-//   }
-// }
-// void myFSM(){
-//   // Serial.print("SreenIndex-FSM: ");
-//   // Serial.println(screenIndex);
-//   // readButtons();
-//   yield();
-
-//   switch (screenIndex) {
-//       case 0: 
-//         cryptoView();  // Coin info screen
-//         break;
-//       case 1: 
-//         singleCryptoView();  // Single crypto info screen
-//         break;
-
-
-//       case 97:
-//         // digitalRainAnim.loop();
-//         break;
-        
-//       case 98:
-//         loadingBar();
-//         // Serial.println("OK2");
-//         if(isConnected && loadingFinished)screenIndex = 0;
-//         break;
-//       case 99:  
-//         boot();
-//         screenIndex = 98;
-//         break;
-//       default: 
-//         break;
-//     }
-// }
 
 
 //===================================BOOT()=================================================
@@ -454,52 +405,63 @@ void boot() {
 }
 // Non-blocking loading bar function (15 segments)
 void loadingBar() {
-  // ScreenWidth= 160 = barWidth*100 + 2*batterySides + 2 Padding
-
-    // int barNum = 100;
-    // int batterySide = 1; //battery white sides
-    // int barWidth = 
-    // int startX = //round(WIDTH * 1/3.5);  //160pixels * 1cm/3.5cm = 46
-    // int endX = WIDTH - startX;
-
-    int startY = 105;  // don't touch
-    int startX = 30;  //padding
+    int startY = 105;  // Don't touch
+    int startX = 30;   // Padding
     int endY = 115;
     int endX = 130;
 
-
-    int barNum = 30;  // Total number of bars (segments)
     int barHeight = (endY - startY) - 2;  // Height of the progress bar
-    int barWidth = (endX - startX) * -1;  // Width of the progress bar (75% of the rectangle width)
+    int barWidth = (endX - startX);       // Total width of the progress bar
+
+    // Serial.print("Current Progress : ");
+    // Serial.println(currentProgress);
     
-    if(currentProgress > barNum)loadingFinished = true;
-    //  if(isLoadingFinished()) screenIndex = 0;
-    // Draw progress bar
-    else {
-        tft.drawRect(startX, startY, endX - startX + 1, endY - startY, ST77XX_WHITE);  // Draw outer rectangle of the bar
-        if (millis() - lastLoadingBar >= loadingProgressSpeed){
-            lastLoadingBar = millis();  // Update the time when the progress is updated
-            int barSegmentWidth = barWidth / barNum;  // Width of each bar segment
-            // loadingProgressSpeed *= 0.8;
 
-            for(int i=0; i<7; i++){
-              // Draw the next segment in the progress bar
-              tft.fillRect(startX + 1 + currentProgress * (barSegmentWidth + 1), startY + 1, barSegmentWidth, barHeight, ST77XX_GREEN);  
-              Serial.print("Printing a load bar : ");
-              Serial.println(currentProgress);
-              currentProgress += 1;  // Move to the next segment
-            }
-            
-        }
-    }
+    // Calculate the current progress width
+      int progressWidth = map(currentProgress, 0, 100, startX, barWidth); // map currentProgress value from 0-100 to startX-barWidth.
+      Serial.print("progressWidth : ");
+      Serial.println(progressWidth);
 
+    // Stop drawing if progress reaches 80% and not connected
+        // if (progressWidth >= 0.8 * barWidth) {
+        //     if (!isConnected) {
+        //         // Serial.println("Progress paused at 80% - waiting for connection.");
+        //         return;  // Exit the function without incrementing last 80% progress (wifi not connected).
+        //     }
+        // }
 
-}  
-bool isLoadingFinished() {
-    return loadingFinished;
+    // Check if loading is finished
+      if (progressWidth == barWidth){
+        if(isConnected) loadingFinished = true;
+        else currentProgress = 0;
+
+      }
+
+    // Clamp the progress width to stay within bounds
+      // if (progressWidth > barWidth) {
+      //     progressWidth = barWidth;
+      // }
+
+    // Draw the outer rectangle of the bar
+      tft.drawRect(startX -1, startY -1, barWidth + 1, endY - startY, ST77XX_WHITE);
+
+    // PROGRESS
+      if (millis() - lastLoadingBar >= loadingProgressSpeed) {
+          lastLoadingBar = millis();  // Update the time when the progress is updated
+
+          // Draw the continuous progress bar
+          tft.fillRect(
+              startX,              // X position (start at the left edge)
+              startY,              // Y position
+              progressWidth,           // Width of the progress bar
+              barHeight,               // Height of the progress bar
+              ST77XX_GREEN             // Color
+          );
+
+          // Increment progress
+          currentProgress += 1;      
+      }
 }
-
-
 
 
 
@@ -524,8 +486,8 @@ void drawText(int x, int y, int textColor, String text) {
 void bootLog(String text, int textColor, int Row){
   Serial.println(text);
 
-  int startY = Row * textHeight("A", tft);
-  int endY = startY + textHeight("A", tft);
+  int startY = Row * textHeight("A", tft)+2;
+  int endY = startY + textHeight("A", tft)+4;
 
   // CLEAR
   tft.fillRect(0, startY, WIDTH, endY, ST77XX_BLACK);
