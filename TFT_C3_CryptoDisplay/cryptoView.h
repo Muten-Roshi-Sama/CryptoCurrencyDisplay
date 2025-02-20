@@ -5,6 +5,7 @@
 // =============== CRYPTO DATA ===============
 const char* coins[] = {"BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "USDCUSDT", "BUSDUSDT"};
 const int numCoins = sizeof(coins) / sizeof(coins[0]);
+int coinToUpdateIndex = 0;
 
 float prices[numCoins] = {0.0};
 float changePercentages[numCoins] = {0.0};
@@ -42,6 +43,14 @@ void updateCoinArray(int coinIndex) {
   }
   http.end();  // End the HTTP request
 } // single coin http update
+void updateNextCoin(){
+  updateCoinArray(coinToUpdateIndex);
+  coinToUpdateIndex ++;
+  if (coinToUpdateIndex >= numCoins) {
+    coinToUpdateIndex = 0; // Reset index to 0 if it exceeds the number of coins
+  }
+}
+
 void updateALLCoins(){
   for (int i = 0; i < numCoins; i++) {
       updateCoinArray(i);
